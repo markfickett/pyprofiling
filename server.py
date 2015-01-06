@@ -6,58 +6,48 @@ import random
 
 import Pyro4
 
+import common
 import messages_pb2
 
 
-SERVER_URI_NAME = 'example.server.greeting'
+class Server(object):
+  def __init__(self):
+    self._players = {}
+    self._player_names = set()
+    self._size = messages_pb2.Coordinate(x=80, y=24)
 
+  def Register(self, req):
+    if req.player_secret in self._players:
+      p = self._players[req.player_secret]
+      raise RuntimeError('Player %s (%s) already registered.' % ())
+    if req.player_name in self._player_names:
+      raise RuntimeError('Player name %s is already taken.' % req.player_name)
+    self._player_names.add(req.player_name)
+    pos = messages_pb2.Coordinate(
+        x=random.randint(0, self._size.x - 1),
+        y=random.randint(0, self._size.y - 1))
+    self._players[req.player_secret] = messages_pb2.Player(
+        secret=req.player_secret,
+        name=req.player_name,
+        pos=pos)
+    print 'registered', self._players[req.player_secret]
 
-class GreetingMaker(object):
-  def get_fortune(self, request):
-    return messages_pb2.Response(
-        fortune='Tomorrow is a lucky day for %s.' % request.name,
-        lucky_number=random.randint(0, 100))
+  def Move(self, req):
+    player = self._players[req.player_secret]
+    if abs(req.move.x) > 1 or abs(req.move.y) > 1:
+      raise RuntimeError('Illegal move %s with value > 1.' % req.move)
+    player.pos.x = (player.pos.x + req.move.x) % self._size.x
+    player.pos.y = (player.pos.y + req.move.y) % self._size.y
 
-
-def RegisterProtoSerialization():
-  """Registers custom (de)serialization for proto classes.
-
-  See http://pythonhosted.org/Pyro4/clientcode.html#serialization and
-  Pyro4's examples/ser_custom/*.py .
-  """
-  for proto_class in (messages_pb2.Request, messages_pb2.Response):
-    _RegisterProtoSerializationForClass(proto_class)
-  _TestSerialization()
-
-
-def _RegisterProtoSerializationForClass(proto_class):
-  class_name = '%s.%s' % (proto_class.__module__, proto_class.__name__)
-  def Serializer(p):
-    return {
-        '__class__': class_name,
-        's': p.SerializeToString(),
-    }
-
-  def Deserializer(classname, d):
-    p = proto_class()
-    p.MergeFromString(str(d['s']))
-    return p
-
-  Pyro4.util.SerializerBase.register_class_to_dict(proto_class, Serializer)
-  Pyro4.util.SerializerBase.register_dict_to_class(class_name, Deserializer)
-
-
-def _TestSerialization():
-  name = 'A Test'
-  p = messages_pb2.Request(name=name)
-  serializer = Pyro4.util.SerpentSerializer()
-  bytes, unused_compressed_status = serializer.serializeData(p)
-  p2 = serializer.deserializeData(bytes)
-  assert p.name == p2.name
+  def GetGameState(self):
+    state = messages_pb2.GameState()
+    for player in self._players.itervalues():
+      state.player.add(name=player.name, pos=player.pos)
+    return state
 
 
 if __name__ == '__main__':
-  RegisterProtoSerialization()
+  common.RegisterProtoSerialization()
   Pyro4.core.Daemon.serveSimple(
-      {GreetingMaker(): SERVER_URI_NAME},
+      {Server(): common.SERVER_URI_NAME},
       ns=True)
