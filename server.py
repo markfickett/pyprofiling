@@ -1,6 +1,7 @@
 import random
 import select
 import socket
+import time
 
 import Pyro4
 
@@ -8,7 +9,8 @@ import common
 import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 
-_SOCKET_READ_TIMEOUT = 3.0  # 0 for non-blocking
+_SERVER_UPDATE_INTERVAL = 1.0
+_SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
 
 
 class Server(object):
@@ -16,6 +18,7 @@ class Server(object):
     self._players = {}
     self._player_names = set()
     self._size = messages_pb2.Coordinate(x=80, y=24)
+    self._last_update = time.time()
 
   def Register(self, req):
     if req.player_secret in self._players:
@@ -30,7 +33,8 @@ class Server(object):
     self._players[req.player_secret] = messages_pb2.Player(
         secret=req.player_secret,
         name=req.player_name,
-        pos=pos)
+        pos=pos,
+        direction=messages_pb2.Coordinate(x=1, y=0))
     print 'registered', self._players[req.player_secret]
 
   def Unregister(self, req):
@@ -42,13 +46,26 @@ class Server(object):
     player = self._players[req.player_secret]
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
       raise RuntimeError('Illegal move %s with value > 1.' % req.move)
-    player.pos.x = (player.pos.x + req.move.x) % self._size.x
-    player.pos.y = (player.pos.y + req.move.y) % self._size.y
+    if not (req.move.x or req.move.y):
+      raise RuntimeError('Cannot stand still.')
+    player.direction.MergeFrom(req.move)
+
+  def _MovePlayer(self, player):
+    player.pos.x = (player.pos.x + player.direction.x) % self._size.x
+    player.pos.y = (player.pos.y + player.direction.y) % self._size.y
+
+  def Update(self):
+    t = time.time()
+    while t - self._last_update > _SERVER_UPDATE_INTERVAL:
+      for player in self._players.itervalues():
+        self._MovePlayer(player)
+      self._last_update += _SERVER_UPDATE_INTERVAL
 
   def GetGameState(self):
     state = messages_pb2.GameState(size=self._size)
     for player in self._players.itervalues():
-      state.player.add(name=player.name, pos=player.pos)
+      state.player.add(
+          name=player.name, pos=player.pos, direction=player.direction)
     return state
 
 
@@ -60,9 +77,10 @@ if __name__ == '__main__':
   ns_uri, ns_daemon, broadcast_server = Pyro4.naming.startNS(host=ip_addr)
   assert broadcast_server
   pyro_daemon = Pyro4.core.Daemon(host=hostname)
-  server_uri = pyro_daemon.register(Server())
-  ns_daemon.nameserver.register(common.SERVER_URI_NAME, server_uri)
-  print 'registered', common.SERVER_URI_NAME, server_uri
+  game_server = Server()
+  game_server_uri = pyro_daemon.register(game_server)
+  ns_daemon.nameserver.register(common.SERVER_URI_NAME, game_server_uri)
+  print 'registered', common.SERVER_URI_NAME, game_server_uri
 
   try:
     ns_sockets = set(ns_daemon.sockets)
@@ -79,6 +97,7 @@ if __name__ == '__main__':
           ns_daemon.events((s,))
         elif s is broadcast_server:
           broadcast_server.processRequest()
+      game_server.Update()
   finally:
     ns_daemon.close()
     broadcast_server.close()
