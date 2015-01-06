@@ -9,63 +9,75 @@ import common
 import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 
-_SERVER_UPDATE_INTERVAL = 1.0
+_SERVER_UPDATE_INTERVAL = 0.3
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
 
 
 class Server(object):
   def __init__(self):
-    self._players = {}
-    self._player_names = set()
+    self._player_heads_by_secret = {}
+    self._updating_blocks = []  # Includes player heads.
+    self._static_blocks_by_coord = {}  # Excludes updating blocks.
+    self._player_names_by_secret = {}
     self._size = messages_pb2.Coordinate(x=80, y=24)
     self._last_update = time.time()
+    self._tick = 0
+    self._next_player_id = 0
 
   def Register(self, req):
-    if req.player_secret in self._players:
-      p = self._players[req.player_secret]
-      raise RuntimeError('Player %s (%s) already registered.' % ())
-    if req.player_name in self._player_names:
+    if req.player_secret in self._player_heads_by_secret:
+      raise RuntimeError(
+          'Player %s already registered as %s.' % (
+              req.player_secret,
+              self._player_names_by_secret[req.player_secret]))
+    if req.player_name in self._player_names_by_secret.values():
       raise RuntimeError('Player name %s is already taken.' % req.player_name)
-    self._player_names.add(req.player_name)
-    pos = messages_pb2.Coordinate(
+    self._player_names_by_secret[req.player_secret] = req.player_name
+
+    starting_pos = messages_pb2.Coordinate(
         x=random.randint(0, self._size.x - 1),
         y=random.randint(0, self._size.y - 1))
-    self._players[req.player_secret] = messages_pb2.Player(
-        secret=req.player_secret,
-        name=req.player_name,
-        pos=pos,
-        direction=messages_pb2.Coordinate(x=1, y=0))
-    print 'registered', self._players[req.player_secret]
+    head = messages_pb2.Block(
+        type=messages_pb2.Block.PLAYER_HEAD,
+        pos=starting_pos,
+        direction=messages_pb2.Coordinate(x=1, y=0),
+        player_id=self._next_player_id,
+        created_tick=self._tick)
+    self._player_heads_by_secret[req.player_secret] = head
+    self._updating_blocks.append(head)
+    self._next_player_id += 1
 
   def Unregister(self, req):
-    player = self._players.pop(req.player_secret, None)
-    if player:
-      self._player_names.remove(player.name)
+    head = self._player_heads_by_secret.pop(req.player_secret, None)
+    if head:
+      del self._player_names_by_secret[req.player_secret]
+      self._updating_blocks.remove(head)
 
   def Move(self, req):
-    player = self._players[req.player_secret]
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
       raise RuntimeError('Illegal move %s with value > 1.' % req.move)
     if not (req.move.x or req.move.y):
       raise RuntimeError('Cannot stand still.')
-    player.direction.MergeFrom(req.move)
+    player_head = self._player_heads_by_secret[req.player_secret]
+    player_head.direction.MergeFrom(req.move)
 
-  def _MovePlayer(self, player):
-    player.pos.x = (player.pos.x + player.direction.x) % self._size.x
-    player.pos.y = (player.pos.y + player.direction.y) % self._size.y
+  def _AdvanceBlock(self, block):
+    block.pos.x = (block.pos.x + block.direction.x) % self._size.x
+    block.pos.y = (block.pos.y + block.direction.y) % self._size.y
 
   def Update(self):
     t = time.time()
     while t - self._last_update > _SERVER_UPDATE_INTERVAL:
-      for player in self._players.itervalues():
-        self._MovePlayer(player)
+      for block in self._updating_blocks:
+        if block.direction:
+          self._AdvanceBlock(block)
       self._last_update += _SERVER_UPDATE_INTERVAL
+      self._tick += 1
 
   def GetGameState(self):
-    state = messages_pb2.GameState(size=self._size)
-    for player in self._players.itervalues():
-      state.player.add(
-          name=player.name, pos=player.pos, direction=player.direction)
+    state = messages_pb2.GameState(
+        size=self._size,
+        block=self._updating_blocks + self._static_blocks_by_coord.values())
     return state
 
 
