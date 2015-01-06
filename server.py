@@ -32,6 +32,11 @@ class Server(object):
         pos=pos)
     print 'registered', self._players[req.player_secret]
 
+  def Unregister(self, req):
+    player = self._players.pop(req.player_secret, None)
+    if player:
+      self._player_names.remove(player.name)
+
   def Move(self, req):
     player = self._players[req.player_secret]
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
@@ -40,7 +45,7 @@ class Server(object):
     player.pos.y = (player.pos.y + req.move.y) % self._size.y
 
   def GetGameState(self):
-    state = messages_pb2.GameState()
+    state = messages_pb2.GameState(size=self._size)
     for player in self._players.itervalues():
       state.player.add(name=player.name, pos=player.pos)
     return state
