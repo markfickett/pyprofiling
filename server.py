@@ -1,13 +1,12 @@
 # http://pythonhosted.org/Pyro4/intro.html#simple-example
 # Start name server with: python -m Pyro4.naming
-# Generate the Python protos with: protoc --python_out=. messages.proto
 
 import random
 
 import Pyro4
 
 import common
-import messages_pb2
+import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 
 class Server(object):
