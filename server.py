@@ -11,6 +11,7 @@ import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 _SERVER_UPDATE_INTERVAL = 0.3
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
+_TAIL_LENGTH = 10
 
 
 class Server(object):
@@ -19,10 +20,25 @@ class Server(object):
     self._updating_blocks = []  # Includes player heads.
     self._static_blocks_by_coord = {}  # Excludes updating blocks.
     self._player_names_by_secret = {}
-    self._size = messages_pb2.Coordinate(x=80, y=24)
+    self._size = messages_pb2.Coordinate(x=78, y=23)
     self._last_update = time.time()
     self._tick = 0
     self._next_player_id = 0
+
+    self._BuildStaticBlocks()
+
+  def _BuildStaticBlocks(self):
+    def _Wall(x, y):
+      return messages_pb2.Block(
+          type=messages_pb2.Block.WALL,
+          pos=messages_pb2.Coordinate(x=x, y=y))
+
+    for x in range(0, self._size.x):
+      for y in (0, self._size.y - 1):
+        self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
+    for y in range(0, self._size.y):
+      for x in (0, self._size.x - 1):
+        self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
 
   def Register(self, req):
     if req.player_secret in self._player_heads_by_secret:
@@ -68,9 +84,21 @@ class Server(object):
   def Update(self):
     t = time.time()
     while t - self._last_update > _SERVER_UPDATE_INTERVAL:
+      for head in self._player_heads_by_secret.itervalues():
+        self._updating_blocks.append(messages_pb2.Block(
+            type=messages_pb2.Block.PLAYER_TAIL,
+            pos=head.pos,
+            created_tick=self._tick,
+            player_id=head.player_id))
+      remaining = []
       for block in self._updating_blocks:
         if block.direction:
           self._AdvanceBlock(block)
+        if (block.type == messages_pb2.Block.PLAYER_TAIL
+            and self._tick - block.created_tick >= _TAIL_LENGTH):
+          continue
+        remaining.append(block)
+      self._updating_blocks = remaining
       self._last_update += _SERVER_UPDATE_INTERVAL
       self._tick += 1
 
