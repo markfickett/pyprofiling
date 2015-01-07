@@ -12,6 +12,7 @@ import messages_pb2  # generate with: protoc --python_out=. messages.proto
 _SERVER_UPDATE_INTERVAL = 0.3
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
 _TAIL_LENGTH = 10
+_B = messages_pb2.Block
 
 
 class Server(object):
@@ -29,8 +30,8 @@ class Server(object):
 
   def _BuildStaticBlocks(self):
     def _Wall(x, y):
-      return messages_pb2.Block(
-          type=messages_pb2.Block.WALL,
+      return _B(
+          type=_B.WALL,
           pos=messages_pb2.Coordinate(x=x, y=y))
 
     for x in range(0, self._size.x):
@@ -53,8 +54,8 @@ class Server(object):
     starting_pos = messages_pb2.Coordinate(
         x=random.randint(0, self._size.x - 1),
         y=random.randint(0, self._size.y - 1))
-    head = messages_pb2.Block(
-        type=messages_pb2.Block.PLAYER_HEAD,
+    head = _B(
+        type=_B.PLAYER_HEAD,
         pos=starting_pos,
         direction=messages_pb2.Coordinate(x=1, y=0),
         player_id=self._next_player_id,
@@ -62,6 +63,9 @@ class Server(object):
     self._player_heads_by_secret[req.player_secret] = head
     self._updating_blocks.append(head)
     self._next_player_id += 1
+
+    return messages_pb2.RegisterResponse(player=messages_pb2.PlayerInfo(
+        name=req.player_name, player_id=head.player_id))
 
   def Unregister(self, req):
     head = self._player_heads_by_secret.pop(req.player_secret, None)
@@ -74,8 +78,9 @@ class Server(object):
       raise RuntimeError('Illegal move %s with value > 1.' % req.move)
     if not (req.move.x or req.move.y):
       raise RuntimeError('Cannot stand still.')
-    player_head = self._player_heads_by_secret[req.player_secret]
-    player_head.direction.MergeFrom(req.move)
+    player_head = self._player_heads_by_secret.get(req.player_secret)
+    if player_head:
+      player_head.direction.MergeFrom(req.move)
 
   def _AdvanceBlock(self, block):
     block.pos.x = (block.pos.x + block.direction.x) % self._size.x
@@ -84,23 +89,67 @@ class Server(object):
   def Update(self):
     t = time.time()
     while t - self._last_update > _SERVER_UPDATE_INTERVAL:
-      for head in self._player_heads_by_secret.itervalues():
-        self._updating_blocks.append(messages_pb2.Block(
-            type=messages_pb2.Block.PLAYER_TAIL,
-            pos=head.pos,
-            created_tick=self._tick,
-            player_id=head.player_id))
-      remaining = []
-      for block in self._updating_blocks:
-        if block.direction:
-          self._AdvanceBlock(block)
-        if (block.type == messages_pb2.Block.PLAYER_TAIL
-            and self._tick - block.created_tick >= _TAIL_LENGTH):
-          continue
-        remaining.append(block)
-      self._updating_blocks = remaining
+      self._Tick()
       self._last_update += _SERVER_UPDATE_INTERVAL
       self._tick += 1
+
+  def _Tick(self):
+    # Add new tail segments.
+    for head in self._player_heads_by_secret.itervalues():
+      self._updating_blocks.append(_B(
+          type=_B.PLAYER_TAIL,
+          pos=head.pos,
+          created_tick=self._tick,
+          player_id=head.player_id))
+
+    # Move blocks and expire tail sections.
+    remaining = []
+    for block in self._updating_blocks:
+      if block.direction:
+        self._AdvanceBlock(block)
+      if (block.type == _B.PLAYER_TAIL
+          and self._tick - block.created_tick >= _TAIL_LENGTH):
+        continue
+      remaining.append(block)
+    self._updating_blocks = remaining
+
+    self._ProcessCollisions()
+
+  def _ProcessCollisions(self):
+    destroyed = []
+    moving_blocks_by_coord = {}
+    for b in self._updating_blocks:
+      coord = (b.pos.x, b.pos.y)
+      hit = None
+      for targets in (moving_blocks_by_coord, self._static_blocks_by_coord):
+        hit = targets.get(coord)
+        if hit:
+          destroyed.append(hit)
+          destroyed.append(b)
+      if not hit:
+        moving_blocks_by_coord[coord] = b
+    for b in destroyed:
+      coord = (b.pos.x, b.pos.y)
+      if b.type == _B.PLAYER_HEAD:
+        self._KillPlayer(b.player_id)
+      else:
+        if b in self._updating_blocks:
+          self._updating_blocks.remove(b)
+        elif self._static_blocks_by_coord.get(coord) is b:
+          del self._static_blocks_by_coord[coord]
+
+  def _KillPlayer(self, player_id):
+    secret = None
+    for secret, head in self._player_heads_by_secret.iteritems():
+      if head.player_id == player_id:
+        break
+    if secret:
+      del self._player_heads_by_secret[secret]
+    for body in list(self._updating_blocks):
+      if body.player_id == player_id:
+        self._updating_blocks.remove(body)
+        if body.type == _B.PLAYER_TAIL:
+          self._static_blocks_by_coord[(body.pos.x, body.pos.y)] = body
 
   def GetGameState(self):
     state = messages_pb2.GameState(
