@@ -20,11 +20,14 @@ class Server(object):
     self._player_heads_by_secret = {}
     self._updating_blocks = []  # Includes player heads.
     self._static_blocks_by_coord = {}  # Excludes updating blocks.
+    self._next_player_id = 0
+
     self._player_names_by_secret = {}
+    self._killed_player_ids = set()
+
     self._size = messages_pb2.Coordinate(x=78, y=23)
     self._last_update = time.time()
     self._tick = 0
-    self._next_player_id = 0
 
     self._BuildStaticBlocks()
 
@@ -150,11 +153,13 @@ class Server(object):
         self._updating_blocks.remove(body)
         if body.type == _B.PLAYER_TAIL:
           self._static_blocks_by_coord[(body.pos.x, body.pos.y)] = body
+    self._killed_player_ids.add(player_id)
 
   def GetGameState(self):
     state = messages_pb2.GameState(
         size=self._size,
-        block=self._updating_blocks + self._static_blocks_by_coord.values())
+        block=self._updating_blocks + self._static_blocks_by_coord.values(),
+        killed_player_id=list(self._killed_player_ids))
     return state
 
 
