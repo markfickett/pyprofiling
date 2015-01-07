@@ -11,24 +11,88 @@ import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 _SERVER_UPDATE_INTERVAL = 0.3
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
+_PAUSE_TICKS = 2 / _SERVER_UPDATE_INTERVAL
 _TAIL_LENGTH = 10
 _B = messages_pb2.Block
 
 
 class Server(object):
   def __init__(self):
-    self._player_heads_by_secret = {}
-    self._updating_blocks = []  # Includes player heads.
-    self._static_blocks_by_coord = {}  # Excludes updating blocks.
-    self._next_player_id = 0
-
-    self._player_names_by_secret = {}
+    self._stage = messages_pb2.GameState.COLLECT_PLAYERS
     self._killed_player_ids = set()
+    self._updating_blocks = []
+    self._static_blocks_by_coord = {}
+
+    self._player_heads_by_secret = {}
+    self._next_player_id = 0
+    self._player_info_by_secret = {}
 
     self._size = messages_pb2.Coordinate(x=78, y=23)
     self._last_update = time.time()
     self._tick = 0
+    self._pause_ticks = 0
 
+  def Register(self, req):
+    if self._stage != messages_pb2.GameState.COLLECT_PLAYERS:
+      raise RuntimeError('Cannot join during stage %s.' % self._stage)
+    if req.player_secret in self._player_info_by_secret:
+      raise RuntimeError(
+          'Player %s already registered as %s.' % (
+              req.player_secret,
+              self._player_info_by_secret[req.player_secret]))
+    if req.player_name in [
+        info.name for info in self._player_info_by_secret.values()]:
+      raise RuntimeError('Player name %s is already taken.' % req.player_name)
+
+    info = messages_pb2.PlayerInfo(
+        player_id=self._next_player_id, name=req.player_name)
+    self._player_info_by_secret[req.player_secret] = info
+    self._AddPlayerHead(req.player_secret, info)
+    self._next_player_id += 1
+    return messages_pb2.RegisterResponse(player=messages_pb2.PlayerInfo(
+        name=req.player_name, player_id=info.player_id))
+
+  def _AddPlayerHead(self, player_secret, player_info):
+    if player_secret in self._player_heads_by_secret:
+      return
+
+    starting_pos = messages_pb2.Coordinate(
+        x=random.randint(0, self._size.x - 1),
+        y=random.randint(0, self._size.y - 1))
+    head = _B(
+        type=_B.PLAYER_HEAD,
+        pos=starting_pos,
+        direction=messages_pb2.Coordinate(x=1, y=0),
+        player_id=player_info.player_id,
+        created_tick=self._tick)
+    self._player_heads_by_secret[player_secret] = head
+    self._updating_blocks.append(head)
+
+  def Unregister(self, req):
+    self._player_info_by_secret.pop(req.player_secret, None)
+    head = self._player_heads_by_secret.pop(req.player_secret, None)
+    if head:
+      self._updating_blocks.remove(head)
+      self._KillPlayer(head.player_id)
+
+  def Start(self):
+    if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
+      self._StartRound()
+
+  def _StartRound(self):
+    if len(self._player_info_by_secret) <= 1:
+      self._stage = messages_pb2.GameState.COLLECT_PLAYERS
+      return
+
+    for secret, info in self._player_info_by_secret.iteritems():
+      self._AddPlayerHead(secret, info)
+
+    self._stage = messages_pb2.GameState.ROUND_START
+    self._killed_player_ids = set()
+    self._pause_ticks = 0
+
+    self._updating_blocks = list(self._player_heads_by_secret.values())
+    self._static_blocks_by_coord = {}  # Excludes updating blocks.
     self._BuildStaticBlocks()
 
   def _BuildStaticBlocks(self):
@@ -44,37 +108,6 @@ class Server(object):
       for x in (0, self._size.x - 1):
         self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
 
-  def Register(self, req):
-    if req.player_secret in self._player_heads_by_secret:
-      raise RuntimeError(
-          'Player %s already registered as %s.' % (
-              req.player_secret,
-              self._player_names_by_secret[req.player_secret]))
-    if req.player_name in self._player_names_by_secret.values():
-      raise RuntimeError('Player name %s is already taken.' % req.player_name)
-    self._player_names_by_secret[req.player_secret] = req.player_name
-
-    starting_pos = messages_pb2.Coordinate(
-        x=random.randint(0, self._size.x - 1),
-        y=random.randint(0, self._size.y - 1))
-    head = _B(
-        type=_B.PLAYER_HEAD,
-        pos=starting_pos,
-        direction=messages_pb2.Coordinate(x=1, y=0),
-        player_id=self._next_player_id,
-        created_tick=self._tick)
-    self._player_heads_by_secret[req.player_secret] = head
-    self._updating_blocks.append(head)
-    self._next_player_id += 1
-
-    return messages_pb2.RegisterResponse(player=messages_pb2.PlayerInfo(
-        name=req.player_name, player_id=head.player_id))
-
-  def Unregister(self, req):
-    head = self._player_heads_by_secret.pop(req.player_secret, None)
-    if head:
-      del self._player_names_by_secret[req.player_secret]
-      self._updating_blocks.remove(head)
 
   def Move(self, req):
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
@@ -92,7 +125,16 @@ class Server(object):
   def Update(self):
     t = time.time()
     while t - self._last_update > _SERVER_UPDATE_INTERVAL:
-      self._Tick()
+      if self._stage == messages_pb2.GameState.ROUND_START:
+        self._pause_ticks += 1
+        if self._pause_ticks > _PAUSE_TICKS:
+          self._stage = messages_pb2.GameState.ROUND
+      elif self._stage == messages_pb2.GameState.ROUND:
+        self._Tick()
+      if self._stage == messages_pb2.GameState.ROUND_END:
+        self._pause_ticks += 1
+        if self._pause_ticks > _PAUSE_TICKS:
+          self._StartRound()
       self._last_update += _SERVER_UPDATE_INTERVAL
       self._tick += 1
 
@@ -117,6 +159,11 @@ class Server(object):
     self._updating_blocks = remaining
 
     self._ProcessCollisions()
+
+    if len(self._player_heads_by_secret) - len(self._killed_player_ids) <= 1:
+      # TODO: Scores.
+      self._pause_ticks = 0
+      self._stage = messages_pb2.GameState.ROUND_END
 
   def _ProcessCollisions(self):
     destroyed = []
@@ -158,8 +205,9 @@ class Server(object):
   def GetGameState(self):
     state = messages_pb2.GameState(
         size=self._size,
+        killed_player_id=list(self._killed_player_ids),
         block=self._updating_blocks + self._static_blocks_by_coord.values(),
-        killed_player_id=list(self._killed_player_ids))
+        stage=self._stage)
     return state
 
 
