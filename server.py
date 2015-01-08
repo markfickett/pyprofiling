@@ -6,10 +6,11 @@ import time
 import Pyro4
 
 import common
+import config
 import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 
-_SERVER_UPDATE_INTERVAL = 0.3
+_SERVER_UPDATE_INTERVAL = max(0.05, config.SPEED)
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
 _PAUSE_TICKS = 2 / _SERVER_UPDATE_INTERVAL
 _DEFAULT_TAIL_LENGTH = 10
@@ -27,7 +28,9 @@ class Server(object):
     self._next_player_id = 0
     self._player_info_by_secret = {}
 
-    self._size = messages_pb2.Coordinate(x=78, y=23)
+    self._size = messages_pb2.Coordinate(
+        x=max(4, config.WIDTH),
+        y=max(4, config.HEIGHT))
     self._last_update = time.time()
     self._tick = 0
     self._pause_ticks = 0
@@ -57,8 +60,8 @@ class Server(object):
       return
 
     starting_pos = messages_pb2.Coordinate(
-        x=random.randint(0, self._size.x - 1),
-        y=random.randint(0, self._size.y - 1))
+        x=random.randint(1, self._size.x - 2),
+        y=random.randint(1, self._size.y - 2))
     head = _B(
         type=_B.PLAYER_HEAD,
         pos=starting_pos,
@@ -101,12 +104,13 @@ class Server(object):
           type=_B.WALL,
           pos=messages_pb2.Coordinate(x=x, y=y))
 
-    for x in range(0, self._size.x):
-      for y in (0, self._size.y - 1):
-        self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
-    for y in range(0, self._size.y):
-      for x in (0, self._size.x - 1):
-        self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
+    if config.WALLS:
+      for x in range(0, self._size.x):
+        for y in (0, self._size.y - 1):
+          self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
+      for y in range(0, self._size.y):
+        for x in (0, self._size.x - 1):
+          self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
 
 
   def Move(self, req):
@@ -161,7 +165,7 @@ class Server(object):
 
     self._ProcessCollisions()
 
-    if len(self._player_heads_by_secret) - len(self._killed_player_ids) <= 1:
+    if len(self._player_info_by_secret) - len(self._killed_player_ids) <= 1:
       # TODO: Scores.
       self._pause_ticks = 0
       self._stage = messages_pb2.GameState.ROUND_END
