@@ -12,7 +12,7 @@ import messages_pb2  # generate with: protoc --python_out=. messages.proto
 _SERVER_UPDATE_INTERVAL = 0.3
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
 _PAUSE_TICKS = 2 / _SERVER_UPDATE_INTERVAL
-_TAIL_LENGTH = 10
+_DEFAULT_TAIL_LENGTH = 10
 _B = messages_pb2.Block
 
 
@@ -149,11 +149,12 @@ class Server(object):
 
     # Move blocks and expire tail sections.
     remaining = []
+    tail_length = _DEFAULT_TAIL_LENGTH + self._tick / 50
     for block in self._updating_blocks:
       if block.direction:
         self._AdvanceBlock(block)
       if (block.type == _B.PLAYER_TAIL
-          and self._tick - block.created_tick >= _TAIL_LENGTH):
+          and self._tick - block.created_tick >= tail_length):
         continue
       remaining.append(block)
     self._updating_blocks = remaining
