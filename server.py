@@ -13,7 +13,7 @@ import messages_pb2  # generate with: protoc --python_out=. messages.proto
 _SERVER_UPDATE_INTERVAL = max(0.05, config.SPEED)
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
 _PAUSE_TICKS = 2 / _SERVER_UPDATE_INTERVAL
-_DEFAULT_TAIL_LENGTH = 10
+_STARTING_TAIL_LENGTH = max(0, config.STARTING_TAIL_LENGTH)
 _B = messages_pb2.Block
 
 
@@ -153,7 +153,7 @@ class Server(object):
 
     # Move blocks and expire tail sections.
     remaining = []
-    tail_length = _DEFAULT_TAIL_LENGTH + self._tick / 50
+    tail_length = _STARTING_TAIL_LENGTH + self._tick / 50
     for block in self._updating_blocks:
       if block.direction:
         self._AdvanceBlock(block)
@@ -184,10 +184,10 @@ class Server(object):
       if not hit:
         moving_blocks_by_coord[coord] = b
     for b in destroyed:
-      coord = (b.pos.x, b.pos.y)
       if b.type == _B.PLAYER_HEAD:
         self._KillPlayer(b.player_id)
       else:
+        coord = (b.pos.x, b.pos.y)
         if b in self._updating_blocks:
           self._updating_blocks.remove(b)
         elif self._static_blocks_by_coord.get(coord) is b:
@@ -219,10 +219,12 @@ class Server(object):
 if __name__ == '__main__':
   common.RegisterProtoSerialization()
 
-  hostname = socket.gethostname()
-  ip_addr = Pyro4.socketutil.getIpAddress(None, workaround127=True)
+  hostname = 'localhost' if config.LOCAL_ONLY else socket.gethostname()
+  ip_addr = '127.0.0.1' if config.LOCAL_ONLY else Pyro4.socketutil.getIpAddress(
+      None, workaround127=True)
   ns_uri, ns_daemon, broadcast_server = Pyro4.naming.startNS(host=ip_addr)
-  assert broadcast_server
+  if not config.LOCAL_ONLY:
+    assert broadcast_server
   pyro_daemon = Pyro4.core.Daemon(host=hostname)
   game_server = Server()
   game_server_uri = pyro_daemon.register(game_server)
@@ -232,8 +234,9 @@ if __name__ == '__main__':
   try:
     ns_sockets = set(ns_daemon.sockets)
     pyro_sockets = set(pyro_daemon.sockets)
-    sockets_to_read = (
-        [broadcast_server] + ns_daemon.sockets + pyro_daemon.sockets)
+    sockets_to_read = ns_daemon.sockets + pyro_daemon.sockets
+    if broadcast_server:
+      sockets_to_read.append(broadcast_server)
     while True:
       ready_read_sockets, _, _ = select.select(
           sockets_to_read, (), (), _SOCKET_READ_TIMEOUT)
@@ -246,6 +249,7 @@ if __name__ == '__main__':
           broadcast_server.processRequest()
       game_server.Update()
   finally:
+    if broadcast_server:
+      broadcast_server.close()
     ns_daemon.close()
-    broadcast_server.close()
     pyro_daemon.close()
