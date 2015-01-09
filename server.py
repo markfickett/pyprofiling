@@ -11,7 +11,7 @@ import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 
 _SERVER_UPDATE_INTERVAL = max(0.05, config.SPEED)
-_SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 3.0)  # 0 for non-blocking
+_SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 0)  # 0 = non-blocking
 _PAUSE_TICKS = 2 / _SERVER_UPDATE_INTERVAL
 _STARTING_TAIL_LENGTH = max(0, config.STARTING_TAIL_LENGTH)
 _B = messages_pb2.Block
