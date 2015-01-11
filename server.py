@@ -59,7 +59,10 @@ class Server(object):
       raise RuntimeError('Player name %s is already taken.' % req.player_name)
 
     info = messages_pb2.PlayerInfo(
-        player_id=self._next_player_id, name=req.player_name, alive=True)
+        player_id=self._next_player_id,
+        name=req.player_name,
+        alive=True,
+        score=0)
     self._player_infos_by_secret[req.player_secret] = info
     self._AddPlayerHead(req.player_secret, info)
     self._next_player_id += 1
@@ -281,6 +284,9 @@ class Server(object):
     self._player_tails = filter(
         lambda p: p.player_id != player_id, self._player_tails)
     self._player_infos_by_secret[secret].alive = False
+    for info in self._player_infos_by_secret.itervalues():
+      if info.alive:
+        info.score += 1
 
   def _SetStage(self, stage):
       if self._stage != stage:
