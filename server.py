@@ -17,6 +17,8 @@ _PAUSE_TICKS = 2 / _SERVER_UPDATE_INTERVAL
 
 _STARTING_TAIL_LENGTH = max(0, config.STARTING_TAIL_LENGTH)
 _MAX_ROCKET_AGE = 100
+_ROCKETS_PER_AMMO = 3
+_AMMO_RARITY = 300  # 1 in this many blocks is ammo.
 _HEAD_MOVE_INTERVAL = 3
 
 _B = messages_pb2.Block
@@ -115,6 +117,13 @@ class Server(object):
         for x in (0, self._size.x - 1):
           self._static_blocks_grid[x][y] = _Wall(x, y)
 
+    if not config.INFINITE_AMMO:
+      for _ in xrange(self._size.x * self._size.y / _AMMO_RARITY):
+        x = random.randint(1, self._size.x - 2)
+        y = random.randint(1, self._size.y - 2)
+        self._static_blocks_grid[x][y] = _B(
+            type=_B.AMMO, pos=messages_pb2.Coordinate(x=x, y=y))
+
   def Move(self, req):
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
       raise RuntimeError('Illegal move %s with value > 1.' % req.move)
@@ -130,8 +139,20 @@ class Server(object):
     elif self._stage == messages_pb2.GameState.ROUND:
       player_head = self._player_heads_by_secret.get(req.player_secret)
       if player_head:
-        self._AddRocket(
-            player_head.pos, player_head.direction, player_head.player_id)
+        if config.INFINITE_AMMO:
+          has_rocket = True
+        else:
+          info = self._player_infos_by_secret[req.player_secret]
+          if info.inventory and info.inventory[-1] == _B.ROCKET:
+            new_inventory = info.inventory[:-1]
+            del info.inventory[:]
+            info.inventory.extend(new_inventory)
+            has_rocket = True
+          else:
+            has_rocket = False
+        if has_rocket:
+          self._AddRocket(
+              player_head.pos, player_head.direction, player_head.player_id)
 
   def _AddRocket(self, origin, direction, player_id):
     rocket_pos = messages_pb2.Coordinate(
@@ -219,7 +240,8 @@ class Server(object):
         hit = target_grid[b.pos.x][b.pos.y]
         if hit:
           destroyed.append(hit)
-          destroyed.append(b)
+          if not self._CheckAddAmmo(b, hit):
+            destroyed.append(b)
       if not hit:
         moving_blocks_grid[b.pos.x][b.pos.y] = b
     for b in destroyed:
@@ -232,6 +254,21 @@ class Server(object):
         if b.type == _B.PLAYER_TAIL and b in self._player_tails:
           # If two players die at once, tails might already be removed.
           self._player_tails.remove(b)
+
+  def _CheckAddAmmo(self, head, ammo):
+    if not (
+        not config.INFINITE_AMMO and
+        head.type == _B.PLAYER_HEAD and ammo.type == _B.AMMO):
+      return False
+    info = None
+    for player in self._player_infos_by_secret.values():
+      if head.player_id == player.player_id:
+        info = player
+        break
+    if info:
+      info.inventory.extend([_B.ROCKET] * _ROCKETS_PER_AMMO)
+      return True
+    return False
 
   def _KillPlayer(self, player_id):
     secret = None
