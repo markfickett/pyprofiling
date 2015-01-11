@@ -19,8 +19,11 @@ _B = messages_pb2.Block
 
 class Server(object):
   def __init__(self):
+    self._size = messages_pb2.Coordinate(
+        x=max(4, config.WIDTH),
+        y=max(4, config.HEIGHT))
     self._updating_blocks = []
-    self._static_blocks_by_coord = {}
+    self._static_blocks_grid = _MakeGrid(self._size)
 
     self._player_heads_by_secret = {}
     self._next_player_id = 0
@@ -28,9 +31,6 @@ class Server(object):
 
     self._stage = None
     self._state_hash = 0
-    self._size = messages_pb2.Coordinate(
-        x=max(4, config.WIDTH),
-        y=max(4, config.HEIGHT))
     self._last_update = time.time()
     self._tick = 0
 
@@ -96,7 +96,7 @@ class Server(object):
       info.alive = True
 
     self._updating_blocks = list(self._player_heads_by_secret.values())
-    self._static_blocks_by_coord = {}  # Excludes updating blocks.
+    self._static_blocks_grid = _MakeGrid(self._size)
     self._BuildStaticBlocks()
 
     self._SetStage(messages_pb2.GameState.ROUND_START)
@@ -110,10 +110,10 @@ class Server(object):
     if config.WALLS:
       for x in range(0, self._size.x):
         for y in (0, self._size.y - 1):
-          self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
+          self._static_blocks_grid[x][y] = _Wall(x, y)
       for y in range(0, self._size.y):
         for x in (0, self._size.x - 1):
-          self._static_blocks_by_coord[(x, y)] = _Wall(x, y)
+          self._static_blocks_grid[x][y] = _Wall(x, y)
 
   def Move(self, req):
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
@@ -176,26 +176,24 @@ class Server(object):
 
   def _ProcessCollisions(self):
     destroyed = []
-    moving_blocks_by_coord = {}
+    moving_blocks_grid = _MakeGrid(self._size)
     for b in self._updating_blocks:
-      coord = (b.pos.x, b.pos.y)
       hit = None
-      for targets in (moving_blocks_by_coord, self._static_blocks_by_coord):
-        hit = targets.get(coord)
+      for targets in (moving_blocks_grid, self._static_blocks_grid):
+        hit = targets[b.pos.x][b.pos.y]
         if hit:
           destroyed.append(hit)
           destroyed.append(b)
       if not hit:
-        moving_blocks_by_coord[coord] = b
+        moving_blocks_grid[b.pos.x][b.pos.y] = b
     for b in destroyed:
       if b.type == _B.PLAYER_HEAD:
         self._KillPlayer(b.player_id)
       else:
-        coord = (b.pos.x, b.pos.y)
         if b in self._updating_blocks:
           self._updating_blocks.remove(b)
-        elif self._static_blocks_by_coord.get(coord) is b:
-          del self._static_blocks_by_coord[coord]
+        elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
+          self._static_blocks_grid[b.pos.x][b.pos.y] = None
 
   def _KillPlayer(self, player_id):
     secret = None
@@ -208,7 +206,7 @@ class Server(object):
       if body.player_id == player_id:
         self._updating_blocks.remove(body)
         if body.type == _B.PLAYER_TAIL:
-          self._static_blocks_by_coord[(body.pos.x, body.pos.y)] = body
+          self._static_blocks_grid[body.pos.x][body.pos.y] = body
     self._player_infos_by_secret[secret].alive = False
 
   def _SetStage(self, stage):
@@ -218,16 +216,26 @@ class Server(object):
         self._RebuildClientFacingState()
 
   def _RebuildClientFacingState(self):
+    static_blocks = []
+    for row in self._static_blocks_grid:
+      static_blocks += filter(bool, row)
     self._client_facing_state = messages_pb2.GameState(
         hash=self._state_hash,
         size=self._size,
         player_info=self._player_infos_by_secret.values(),
-        block=self._updating_blocks + self._static_blocks_by_coord.values(),
+        block=self._updating_blocks + static_blocks,
         stage=self._stage)
     self._state_hash += 1
 
   def GetGameState(self, req):
     return self._client_facing_state if req.hash != self._state_hash else None
+
+
+def _MakeGrid(size):
+  grid = []
+  for x in range(size.x):
+    grid.append([None] * size.y)
+  return grid
 
 
 if __name__ == '__main__':
