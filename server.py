@@ -156,10 +156,13 @@ class Server(object):
     tail_length = _STARTING_TAIL_LENGTH + self._tick / 50
     for block in self._player_heads_by_secret.values():
       self._AdvanceBlock(block)
+    rm_indices = []
     for i, tail in enumerate(self._player_tails):
       if self._tick - tail.created_tick >= tail_length:
         self._static_blocks_grid[tail.pos.x][tail.pos.y] = None
-        del self._player_tails[i]
+        rm_indices.append(i)
+    for i in reversed(rm_indices):
+      del self._player_tails[i]
 
     self._ProcessCollisions()
 
@@ -197,9 +200,9 @@ class Server(object):
         break
     if secret:
       del self._player_heads_by_secret[secret]
-    for i, tail in enumerate(self._player_tails):
-      if tail.player_id == player_id:
-        del self._player_tails[i]  # will no longer update, already in statics
+    # will no longer update, already in statics
+    self._player_tails = filter(
+        lambda p: p.player_id != player_id, self._player_tails)
     self._player_infos_by_secret[secret].alive = False
 
   def _SetStage(self, stage):
