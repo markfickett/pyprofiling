@@ -1,3 +1,4 @@
+import itertools
 import random
 import select
 import socket
@@ -13,7 +14,11 @@ import messages_pb2  # generate with: protoc --python_out=. messages.proto
 _SERVER_UPDATE_INTERVAL = max(0.05, config.SPEED)
 _SOCKET_READ_TIMEOUT = min(_SERVER_UPDATE_INTERVAL/2, 0)  # 0 = non-blocking
 _PAUSE_TICKS = 2 / _SERVER_UPDATE_INTERVAL
+
 _STARTING_TAIL_LENGTH = max(0, config.STARTING_TAIL_LENGTH)
+_MAX_ROCKET_AGE = 100
+_HEAD_MOVE_INTERVAL = 3
+
 _B = messages_pb2.Block
 
 
@@ -24,6 +29,7 @@ class Server(object):
         y=max(4, config.HEIGHT))
     self._static_blocks_grid = _MakeGrid(self._size)
     self._player_tails = []  # a subset of static blocks; to track expiration
+    self._rockets = []
 
     self._player_heads_by_secret = {}
     self._next_player_id = 0
@@ -80,10 +86,6 @@ class Server(object):
       self._KillPlayer(head.player_id)
       self._RebuildClientFacingState()
 
-  def Start(self):
-    if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
-      self._StartRound()
-
   def _StartRound(self):
     if len(self._player_infos_by_secret) <= 1:
       self._SetStage(messages_pb2.GameState.COLLECT_PLAYERS)
@@ -93,6 +95,7 @@ class Server(object):
       self._AddPlayerHead(secret, info)
       info.alive = True
 
+    self._rockets = []
     self._static_blocks_grid = _MakeGrid(self._size)
     self._BuildStaticBlocks()
 
@@ -121,6 +124,26 @@ class Server(object):
     if player_head:
       player_head.direction.MergeFrom(req.move)
 
+  def Action(self, req):
+    if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
+      self._StartRound()
+    elif self._stage == messages_pb2.GameState.ROUND:
+      player_head = self._player_heads_by_secret.get(req.player_secret)
+      if player_head:
+        self._AddRocket(
+            player_head.pos, player_head.direction, player_head.player_id)
+
+  def _AddRocket(self, origin, direction, player_id):
+    rocket_pos = messages_pb2.Coordinate(
+        x=origin.x + direction.x, y=origin.y + direction.y)
+    self._rockets.append(_B(
+        type=_B.ROCKET,
+        pos=rocket_pos,
+        direction=direction,
+        created_tick=self._tick,
+        player_id=player_id))
+    self._RebuildClientFacingState()
+
   def _AdvanceBlock(self, block):
     block.pos.x = (block.pos.x + block.direction.x) % self._size.x
     block.pos.y = (block.pos.y + block.direction.y) % self._size.y
@@ -142,27 +165,40 @@ class Server(object):
       self._tick += 1
 
   def _Tick(self):
-    # Add new tail segments.
-    for head in self._player_heads_by_secret.itervalues():
-      tail = _B(
-          type=_B.PLAYER_TAIL,
-          pos=head.pos,
-          created_tick=self._tick,
-          player_id=head.player_id)
-      self._player_tails.append(tail)
-      self._static_blocks_grid[tail.pos.x][tail.pos.y] = tail
+    if self._tick % _HEAD_MOVE_INTERVAL == 0:
+      # Add new tail segments, move heads.
+      for head in self._player_heads_by_secret.itervalues():
+        tail = _B(
+            type=_B.PLAYER_TAIL,
+            pos=head.pos,
+            created_tick=self._tick,
+            player_id=head.player_id)
+        self._player_tails.append(tail)
+        self._static_blocks_grid[tail.pos.x][tail.pos.y] = tail
+      for head in self._player_heads_by_secret.values():
+        self._AdvanceBlock(head)
 
-    # Move heads and expire tail sections.
-    tail_length = _STARTING_TAIL_LENGTH + self._tick / 50
-    for block in self._player_heads_by_secret.values():
-      self._AdvanceBlock(block)
+    for rocket in self._rockets:
+      self._AdvanceBlock(rocket)
+
+    # Expire tails.
+    tail_expiry = _HEAD_MOVE_INTERVAL * (
+        _STARTING_TAIL_LENGTH + self._tick / 50)
     rm_indices = []
     for i, tail in enumerate(self._player_tails):
-      if self._tick - tail.created_tick >= tail_length:
+      if self._tick - tail.created_tick >= tail_expiry:
         self._static_blocks_grid[tail.pos.x][tail.pos.y] = None
         rm_indices.append(i)
     for i in reversed(rm_indices):
       del self._player_tails[i]
+
+    # Expire rockets.
+    rm_indices = []
+    for i, rocket in enumerate(self._rockets):
+      if self._tick - rocket.created_tick >= _MAX_ROCKET_AGE:
+        rm_indices.append(i)
+    for i in reversed(rm_indices):
+      del self._rockets[i]
 
     self._ProcessCollisions()
 
@@ -176,7 +212,8 @@ class Server(object):
   def _ProcessCollisions(self):
     destroyed = []
     moving_blocks_grid = _MakeGrid(self._size)
-    for b in self._player_heads_by_secret.values():
+    for b in itertools.chain(
+        self._player_heads_by_secret.values(), self._rockets):
       hit = None
       for targets in (moving_blocks_grid, self._static_blocks_grid):
         hit = targets[b.pos.x][b.pos.y]
@@ -188,6 +225,8 @@ class Server(object):
     for b in destroyed:
       if b.type == _B.PLAYER_HEAD:
         self._KillPlayer(b.player_id)
+      elif b.type == _B.ROCKET:
+        self._rockets.remove(b)
       elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
         self._static_blocks_grid[b.pos.x][b.pos.y] = None
         if b.type == _B.PLAYER_TAIL:
@@ -221,6 +260,7 @@ class Server(object):
         player_info=self._player_infos_by_secret.values(),
         block=(
             static_blocks +
+            self._rockets +
             self._player_heads_by_secret.values()),
         stage=self._stage)
     self._state_hash += 1
