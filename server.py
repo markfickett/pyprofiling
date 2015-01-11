@@ -22,8 +22,8 @@ class Server(object):
     self._size = messages_pb2.Coordinate(
         x=max(4, config.WIDTH),
         y=max(4, config.HEIGHT))
-    self._updating_blocks = []
     self._static_blocks_grid = _MakeGrid(self._size)
+    self._player_tails = []  # a subset of static blocks; to track expiration
 
     self._player_heads_by_secret = {}
     self._next_player_id = 0
@@ -72,13 +72,11 @@ class Server(object):
         player_id=player_info.player_id,
         created_tick=self._tick)
     self._player_heads_by_secret[player_secret] = head
-    self._updating_blocks.append(head)
 
   def Unregister(self, req):
     self._player_infos_by_secret.pop(req.player_secret, None)
     head = self._player_heads_by_secret.pop(req.player_secret, None)
     if head:
-      self._updating_blocks.remove(head)
       self._KillPlayer(head.player_id)
       self._RebuildClientFacingState()
 
@@ -95,7 +93,6 @@ class Server(object):
       self._AddPlayerHead(secret, info)
       info.alive = True
 
-    self._updating_blocks = list(self._player_heads_by_secret.values())
     self._static_blocks_grid = _MakeGrid(self._size)
     self._BuildStaticBlocks()
 
@@ -147,23 +144,22 @@ class Server(object):
   def _Tick(self):
     # Add new tail segments.
     for head in self._player_heads_by_secret.itervalues():
-      self._updating_blocks.append(_B(
+      tail = _B(
           type=_B.PLAYER_TAIL,
           pos=head.pos,
           created_tick=self._tick,
-          player_id=head.player_id))
+          player_id=head.player_id)
+      self._player_tails.append(tail)
+      self._static_blocks_grid[tail.pos.x][tail.pos.y] = tail
 
-    # Move blocks and expire tail sections.
-    remaining = []
+    # Move heads and expire tail sections.
     tail_length = _STARTING_TAIL_LENGTH + self._tick / 50
-    for block in self._updating_blocks:
-      if block.direction:
-        self._AdvanceBlock(block)
-      if (block.type == _B.PLAYER_TAIL
-          and self._tick - block.created_tick >= tail_length):
-        continue
-      remaining.append(block)
-    self._updating_blocks = remaining
+    for block in self._player_heads_by_secret.values():
+      self._AdvanceBlock(block)
+    for i, tail in enumerate(self._player_tails):
+      if self._tick - tail.created_tick >= tail_length:
+        self._static_blocks_grid[tail.pos.x][tail.pos.y] = None
+        del self._player_tails[i]
 
     self._ProcessCollisions()
 
@@ -177,7 +173,7 @@ class Server(object):
   def _ProcessCollisions(self):
     destroyed = []
     moving_blocks_grid = _MakeGrid(self._size)
-    for b in self._updating_blocks:
+    for b in self._player_heads_by_secret.values():
       hit = None
       for targets in (moving_blocks_grid, self._static_blocks_grid):
         hit = targets[b.pos.x][b.pos.y]
@@ -189,11 +185,10 @@ class Server(object):
     for b in destroyed:
       if b.type == _B.PLAYER_HEAD:
         self._KillPlayer(b.player_id)
-      else:
-        if b in self._updating_blocks:
-          self._updating_blocks.remove(b)
-        elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
-          self._static_blocks_grid[b.pos.x][b.pos.y] = None
+      elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
+        self._static_blocks_grid[b.pos.x][b.pos.y] = None
+        if b.type == _B.PLAYER_TAIL:
+          self._player_tails.remove(b)
 
   def _KillPlayer(self, player_id):
     secret = None
@@ -202,11 +197,9 @@ class Server(object):
         break
     if secret:
       del self._player_heads_by_secret[secret]
-    for body in list(self._updating_blocks):
-      if body.player_id == player_id:
-        self._updating_blocks.remove(body)
-        if body.type == _B.PLAYER_TAIL:
-          self._static_blocks_grid[body.pos.x][body.pos.y] = body
+    for i, tail in enumerate(self._player_tails):
+      if tail.player_id == player_id:
+        del self._player_tails[i]  # will no longer update, already in statics
     self._player_infos_by_secret[secret].alive = False
 
   def _SetStage(self, stage):
@@ -223,7 +216,9 @@ class Server(object):
         hash=self._state_hash,
         size=self._size,
         player_info=self._player_infos_by_secret.values(),
-        block=self._updating_blocks + static_blocks,
+        block=(
+            static_blocks +
+            self._player_heads_by_secret.values()),
         stage=self._stage)
     self._state_hash += 1
 
