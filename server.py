@@ -26,6 +26,7 @@ class Server(object):
     self._next_player_id = 0
     self._player_infos_by_secret = {}
 
+    self._stage = None
     self._state_hash = 0
     self._size = messages_pb2.Coordinate(
         x=max(4, config.WIDTH),
@@ -72,7 +73,6 @@ class Server(object):
         created_tick=self._tick)
     self._player_heads_by_secret[player_secret] = head
     self._updating_blocks.append(head)
-    self._RebuildClientFacingState()
 
   def Unregister(self, req):
     self._player_infos_by_secret.pop(req.player_secret, None)
@@ -143,7 +143,6 @@ class Server(object):
           self._StartRound()
       self._last_update += _SERVER_UPDATE_INTERVAL
       self._tick += 1
-    self._RebuildClientFacingState()
 
   def _Tick(self):
     # Add new tail segments.
@@ -213,9 +212,10 @@ class Server(object):
     self._player_infos_by_secret[secret].alive = False
 
   def _SetStage(self, stage):
-      self._stage = stage
-      self._pause_ticks = 0
-      self._RebuildClientFacingState()
+      if self._stage != stage:
+        self._stage = stage
+        self._pause_ticks = 0
+        self._RebuildClientFacingState()
 
   def _RebuildClientFacingState(self):
     self._client_facing_state = messages_pb2.GameState(
