@@ -215,8 +215,8 @@ class Server(object):
     for b in itertools.chain(
         self._player_heads_by_secret.values(), self._rockets):
       hit = None
-      for targets in (moving_blocks_grid, self._static_blocks_grid):
-        hit = targets[b.pos.x][b.pos.y]
+      for target_grid in (moving_blocks_grid, self._static_blocks_grid):
+        hit = target_grid[b.pos.x][b.pos.y]
         if hit:
           destroyed.append(hit)
           destroyed.append(b)
@@ -229,7 +229,8 @@ class Server(object):
         self._rockets.remove(b)
       elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
         self._static_blocks_grid[b.pos.x][b.pos.y] = None
-        if b.type == _B.PLAYER_TAIL:
+        if b.type == _B.PLAYER_TAIL and b in self._player_tails:
+          # If two players die at once, tails might already be removed.
           self._player_tails.remove(b)
 
   def _KillPlayer(self, player_id):
