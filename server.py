@@ -180,19 +180,26 @@ class Server(object):
 
   def Update(self):
     t = time.time()
-    while t - self._last_update > _SERVER_UPDATE_INTERVAL:
-      if self._stage == messages_pb2.GameState.ROUND_START:
-        self._pause_ticks += 1
-        if self._pause_ticks > _PAUSE_TICKS:
-          self._SetStage(messages_pb2.GameState.ROUND)
-      elif self._stage == messages_pb2.GameState.ROUND:
-        self._Tick()
-      if self._stage == messages_pb2.GameState.ROUND_END:
-        self._pause_ticks += 1
-        if self._pause_ticks > _PAUSE_TICKS:
-          self._StartRound()
-      self._last_update += _SERVER_UPDATE_INTERVAL
-      self._tick += 1
+    dt = t - self._last_update
+    if dt < _SERVER_UPDATE_INTERVAL:
+      return
+    elif dt > _SERVER_UPDATE_INTERVAL * 1.5:
+      print (
+          '%.2f behind for update %d'
+          % (dt - _SERVER_UPDATE_INTERVAL, self._tick + 1))
+    self._last_update = t
+
+    if self._stage == messages_pb2.GameState.ROUND_START:
+      self._pause_ticks += 1
+      if self._pause_ticks > _PAUSE_TICKS:
+        self._SetStage(messages_pb2.GameState.ROUND)
+    elif self._stage == messages_pb2.GameState.ROUND:
+      self._Tick()
+    if self._stage == messages_pb2.GameState.ROUND_END:
+      self._pause_ticks += 1
+      if self._pause_ticks > _PAUSE_TICKS:
+        self._StartRound()
+    self._tick += 1
 
   def _Tick(self):
     if self._tick % _HEAD_MOVE_INTERVAL == 0:
