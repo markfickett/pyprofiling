@@ -83,6 +83,7 @@ class Server(object):
         created_tick=self._tick)
     self._player_heads_by_secret[player_secret] = head
 
+  @Pyro4.oneway
   def Unregister(self, req):
     self._player_infos_by_secret.pop(req.player_secret, None)
     head = self._player_heads_by_secret.pop(req.player_secret, None)
@@ -129,6 +130,7 @@ class Server(object):
         pos = _RandomPosWithin(self._size)
         self._static_blocks_grid[pos.x][pos.y] = _B(type=_B.MINE, pos=pos)
 
+  @Pyro4.oneway
   def Move(self, req):
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
       raise RuntimeError('Illegal move %s with value > 1.' % req.move)
@@ -138,6 +140,7 @@ class Server(object):
     if player_head:
       player_head.direction.MergeFrom(req.move)
 
+  @Pyro4.oneway
   def Action(self, req):
     if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
       self._StartRound()
