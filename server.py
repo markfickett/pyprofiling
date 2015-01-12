@@ -101,6 +101,7 @@ class Server(object):
       info.alive = True
 
     self._rockets = []
+    self._player_tails = []
     self._static_blocks_grid = _MakeGrid(self._size)
     self._BuildStaticBlocks()
 
