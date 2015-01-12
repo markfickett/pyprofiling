@@ -257,18 +257,18 @@ class Server(object):
         self._KillPlayer(b.player_id)
       elif b.type == _B.ROCKET:
         self._rockets.remove(b)
-      elif b.type == _B.MINE:
-        for i in range(-1, 2):
-          for j in range(-1, 2):
-            if i == 0 and j == 0:
-              continue
-            self._AddRocket(
-                b.pos, messages_pb2.Coordinate(x=i, y=j), b.player_id)
       elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
         self._static_blocks_grid[b.pos.x][b.pos.y] = None
         if b.type == _B.PLAYER_TAIL and b in self._player_tails:
           # If two players die at once, tails might already be removed.
           self._player_tails.remove(b)
+        elif b.type == _B.MINE:
+          for i in range(-1, 2):
+            for j in range(-1, 2):
+              if i == 0 and j == 0:
+                continue
+              self._AddRocket(
+                  b.pos, messages_pb2.Coordinate(x=i, y=j), b.player_id)
 
   def _CheckAddAmmo(self, head, ammo):
     if not (
