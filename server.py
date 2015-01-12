@@ -19,6 +19,7 @@ _STARTING_TAIL_LENGTH = max(0, config.STARTING_TAIL_LENGTH)
 _MAX_ROCKET_AGE = 100
 _ROCKETS_PER_AMMO = 3
 _AMMO_RARITY = 300  # 1 in this many blocks is ammo.
+_MINE_RARITY = 500
 _HEAD_MOVE_INTERVAL = 3
 
 _B = messages_pb2.Block
@@ -73,9 +74,7 @@ class Server(object):
     if player_secret in self._player_heads_by_secret:
       return
 
-    starting_pos = messages_pb2.Coordinate(
-        x=random.randint(1, self._size.x - 2),
-        y=random.randint(1, self._size.y - 2))
+    starting_pos = _RandomPosWithin(self._size)
     head = _B(
         type=_B.PLAYER_HEAD,
         pos=starting_pos,
@@ -122,10 +121,13 @@ class Server(object):
 
     if not config.INFINITE_AMMO:
       for _ in xrange(self._size.x * self._size.y / _AMMO_RARITY):
-        x = random.randint(1, self._size.x - 2)
-        y = random.randint(1, self._size.y - 2)
-        self._static_blocks_grid[x][y] = _B(
-            type=_B.AMMO, pos=messages_pb2.Coordinate(x=x, y=y))
+        pos = _RandomPosWithin(self._size)
+        self._static_blocks_grid[pos.x][pos.y] = _B(type=_B.AMMO, pos=pos)
+
+    if config.MINES:
+      for _ in xrange(self._size.x * self._size.y / _MINE_RARITY):
+        pos = _RandomPosWithin(self._size)
+        self._static_blocks_grid[pos.x][pos.y] = _B(type=_B.MINE, pos=pos)
 
   def Move(self, req):
     if abs(req.move.x) > 1 or abs(req.move.y) > 1:
@@ -252,6 +254,13 @@ class Server(object):
         self._KillPlayer(b.player_id)
       elif b.type == _B.ROCKET:
         self._rockets.remove(b)
+      elif b.type == _B.MINE:
+        for i in range(-1, 2):
+          for j in range(-1, 2):
+            if i == 0 and j == 0:
+              continue
+            self._AddRocket(
+                b.pos, messages_pb2.Coordinate(x=i, y=j), b.player_id)
       elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
         self._static_blocks_grid[b.pos.x][b.pos.y] = None
         if b.type == _B.PLAYER_TAIL and b in self._player_tails:
@@ -318,6 +327,12 @@ def _MakeGrid(size):
   for x in range(size.x):
     grid.append([None] * size.y)
   return grid
+
+
+def _RandomPosWithin(world_size):
+  return messages_pb2.Coordinate(
+      x=random.randint(1, world_size.x - 2),
+      y=random.randint(1, world_size.y - 2))
 
 
 if __name__ == '__main__':
