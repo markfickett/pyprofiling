@@ -264,7 +264,8 @@ class Server(object):
       if b.type == _B.PLAYER_HEAD:
         self._KillPlayer(b.player_id)
       elif b.type == _B.ROCKET:
-        self._rockets.remove(b)
+        if b in self._rockets:  # for rocket-rocket collision
+          self._rockets.remove(b)
       elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
         self._static_blocks_grid[b.pos.x][b.pos.y] = None
         if b.type == _B.PLAYER_TAIL and b in self._player_tails:
