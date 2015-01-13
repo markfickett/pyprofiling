@@ -349,11 +349,12 @@ def _RandomPosWithin(world_size):
 if __name__ == '__main__':
   common.RegisterProtoSerialization()
 
-  hostname = 'localhost' if config.LOCAL_ONLY else socket.gethostname()
-  ip_addr = '127.0.0.1' if config.LOCAL_ONLY else Pyro4.socketutil.getIpAddress(
-      None, workaround127=True)
+  hostname = 'localhost' if config.LOCALHOST_ONLY else socket.gethostname()
+  ip_addr = (
+      '127.0.0.1' if config.LOCALHOST_ONLY
+      else Pyro4.socketutil.getIpAddress(None, workaround127=True))
   ns_uri, ns_daemon, broadcast_server = Pyro4.naming.startNS(host=ip_addr)
-  if not config.LOCAL_ONLY:
+  if not config.LOCALHOST_ONLY:
     assert broadcast_server
   pyro_daemon = Pyro4.core.Daemon(host=hostname)
   game_server = Server()
