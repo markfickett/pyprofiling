@@ -38,6 +38,7 @@ class Server(object):
     self._next_player_id = 0
     self._player_infos_by_secret = {}
 
+    self._dirty = True
     self._stage = None
     self._state_hash = 0
     self._last_update = time.time()
@@ -67,7 +68,7 @@ class Server(object):
     self._player_infos_by_secret[req.player_secret] = info
     self._AddPlayerHead(req.player_secret, info)
     self._next_player_id += 1
-    self._RebuildClientFacingState()
+    self._dirty = True
     return messages_pb2.RegisterResponse(player=info)
 
   def _AddPlayerHead(self, player_secret, player_info):
@@ -89,7 +90,7 @@ class Server(object):
     head = self._player_heads_by_secret.pop(req.player_secret, None)
     if head:
       self._KillPlayer(head.player_id)
-      self._RebuildClientFacingState()
+      self._dirty = True
 
   def _StartRound(self):
     if len(self._player_infos_by_secret) <= 1:
@@ -172,7 +173,7 @@ class Server(object):
         direction=direction,
         created_tick=self._tick,
         player_id=player_id))
-    self._RebuildClientFacingState()
+    self._dirty = True
 
   def _AdvanceBlock(self, block):
     block.pos.x = (block.pos.x + block.direction.x) % self._size.x
@@ -242,9 +243,8 @@ class Server(object):
     if len(filter(
         lambda p: p.alive, self._player_infos_by_secret.values())) <= 1:
       self._SetStage(messages_pb2.GameState.ROUND_END)
-      # TODO: Scores.
 
-    self._RebuildClientFacingState()
+    self._dirty = True
 
   def _ProcessCollisions(self):
     destroyed = []
@@ -313,24 +313,25 @@ class Server(object):
       if self._stage != stage:
         self._stage = stage
         self._pause_ticks = 0
-        self._RebuildClientFacingState()
-
-  def _RebuildClientFacingState(self):
-    static_blocks = []
-    for row in self._static_blocks_grid:
-      static_blocks += filter(bool, row)
-    self._client_facing_state = messages_pb2.GameState(
-        hash=self._state_hash,
-        size=self._size,
-        player_info=self._player_infos_by_secret.values(),
-        block=(
-            static_blocks +
-            self._rockets +
-            self._player_heads_by_secret.values()),
-        stage=self._stage)
-    self._state_hash += 1
+        self._dirty = True
 
   def GetGameState(self, req):
+    if self._dirty:
+      static_blocks = []
+      for row in self._static_blocks_grid:
+        static_blocks += filter(bool, row)
+      self._client_facing_state = messages_pb2.GameState(
+          hash=self._state_hash,
+          size=self._size,
+          player_info=self._player_infos_by_secret.values(),
+          block=(
+              static_blocks +
+              self._rockets +
+              self._player_heads_by_secret.values()),
+          stage=self._stage)
+      self._state_hash += 1
+      self._dirty = False
+
     return self._client_facing_state if req.hash != self._state_hash else None
 
 
