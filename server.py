@@ -12,6 +12,7 @@ import Pyro4
 
 import common
 import config
+import height_map
 import messages_pb2  # generate with: protoc --python_out=. messages.proto
 
 
@@ -113,18 +114,27 @@ class Server(object):
     self._SetStage(messages_pb2.GameState.ROUND_START)
 
   def _BuildStaticBlocks(self):
-    def _Wall(x, y):
+    def _Block(block_type, x, y):
       return _B(
-          type=_B.WALL,
+          type=block_type,
           pos=messages_pb2.Coordinate(x=x, y=y))
+
+    if config.TERRAIN:
+      hm = height_map.MakeHeightMap(self._size, 0, 20)
+      for i in xrange(self._size.x):
+        for j in xrange(self._size.y):
+          if hm[i][j] >= 13:
+            self._static_blocks_grid[i][j] = _Block(_B.ROCK, i, j)
+          elif hm[i][j] >= 12:
+            self._static_blocks_grid[i][j] = _Block(_B.TREE, i, j)
 
     if config.WALLS:
       for x in range(0, self._size.x):
         for y in (0, self._size.y - 1):
-          self._static_blocks_grid[x][y] = _Wall(x, y)
+          self._static_blocks_grid[x][y] = _Block(_B.WALL, x, y)
       for y in range(0, self._size.y):
         for x in (0, self._size.x - 1):
-          self._static_blocks_grid[x][y] = _Wall(x, y)
+          self._static_blocks_grid[x][y] = _Block(_B.WALL, x, y)
 
     if not config.INFINITE_AMMO:
       for _ in xrange(self._size.x * self._size.y / _AMMO_RARITY):
