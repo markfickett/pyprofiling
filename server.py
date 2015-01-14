@@ -1,3 +1,7 @@
+#!/usr/bin/env python
+"""A Nuke Snake server, to host network-enabled game play."""
+
+import argparse
 import itertools
 import random
 import select
@@ -20,16 +24,16 @@ _MAX_ROCKET_AGE = 300
 _ROCKETS_PER_AMMO = 3
 _AMMO_RARITY = max(1, config.AMMO_RARITY)
 _MINE_RARITY = max(2, config.MINE_RARITY)
-_HEAD_MOVE_INTERVAL = 3
+_HEAD_MOVE_INTERVAL = 3  # This makes rockets faster than player snakes.
 
 _B = messages_pb2.Block
 
 
 class Server(object):
-  def __init__(self):
+  def __init__(self, width, height):
     self._size = messages_pb2.Coordinate(
-        x=max(4, config.WIDTH),
-        y=max(4, config.HEIGHT))
+        x=max(4, width),
+        y=max(4, height))
     self._static_blocks_grid = _MakeGrid(self._size)
     self._player_tails = []  # a subset of static blocks; to track expiration
     self._rockets = []
@@ -348,18 +352,39 @@ def _RandomPosWithin(world_size):
       y=random.randint(1, world_size.y - 2))
 
 
+def AddGameServerArgs(parser):
+  parser.add_argument(
+      '-x', '--width', type=int, default=79,
+      help=(
+          'Width of the world in blocks (characters). Network clients pick '
+          'up the size of the world from the server; standalone clients '
+          'specify their own world size.'))
+  parser.add_argument(
+      '-y', '--height', type=int, default=23,
+      help='Height of the world in blocks.')
+
+
 if __name__ == '__main__':
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument(
+      '-l', '--localhost-only', action='store_true', dest='localhost_only',
+      help=(
+          'Bind the listening socket to localhost. Useful when there is no '
+          'WAN connection available.'))
+  AddGameServerArgs(parser)
+  args = parser.parse_args()
   common.RegisterProtoSerialization()
 
-  hostname = 'localhost' if config.LOCALHOST_ONLY else socket.gethostname()
+  game_server = Server(args.width, args.height)
+
+  hostname = 'localhost' if args.localhost_only else socket.gethostname()
   ip_addr = (
-      '127.0.0.1' if config.LOCALHOST_ONLY
+      '127.0.0.1' if args.localhost_only
       else Pyro4.socketutil.getIpAddress(None, workaround127=True))
   ns_uri, ns_daemon, broadcast_server = Pyro4.naming.startNS(host=ip_addr)
-  if not config.LOCALHOST_ONLY:
+  if not args.localhost_only:
     assert broadcast_server
   pyro_daemon = Pyro4.core.Daemon(host=hostname)
-  game_server = Server()
   game_server_uri = pyro_daemon.register(game_server)
   ns_daemon.nameserver.register(common.SERVER_URI_NAME, game_server_uri)
   print 'registered', common.SERVER_URI_NAME, game_server_uri
@@ -381,6 +406,8 @@ if __name__ == '__main__':
         elif s is broadcast_server:
           broadcast_server.processRequest()
       game_server.Update()
+  except KeyboardInterrupt:
+    print 'Server shutting down.'
   finally:
     if broadcast_server:
       broadcast_server.close()
