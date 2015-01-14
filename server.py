@@ -364,25 +364,15 @@ def AddGameServerArgs(parser):
       help='Height of the world in blocks.')
 
 
-if __name__ == '__main__':
-  parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument(
-      '-l', '--localhost-only', action='store_true', dest='localhost_only',
-      help=(
-          'Bind the listening socket to localhost. Useful when there is no '
-          'WAN connection available.'))
-  AddGameServerArgs(parser)
-  args = parser.parse_args()
+def _RunNetworkServer(game_server, localhost_only):
   common.RegisterProtoSerialization()
 
-  game_server = Server(args.width, args.height)
-
-  hostname = 'localhost' if args.localhost_only else socket.gethostname()
+  hostname = 'localhost' if localhost_only else socket.gethostname()
   ip_addr = (
-      '127.0.0.1' if args.localhost_only
+      '127.0.0.1' if localhost_only
       else Pyro4.socketutil.getIpAddress(None, workaround127=True))
   ns_uri, ns_daemon, broadcast_server = Pyro4.naming.startNS(host=ip_addr)
-  if not args.localhost_only:
+  if not localhost_only:
     assert broadcast_server
   pyro_daemon = Pyro4.core.Daemon(host=hostname)
   game_server_uri = pyro_daemon.register(game_server)
@@ -413,3 +403,18 @@ if __name__ == '__main__':
       broadcast_server.close()
     ns_daemon.close()
     pyro_daemon.close()
+
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument(
+      '-l', '--localhost-only', action='store_true', dest='localhost_only',
+      help=(
+          'Bind the listening socket to localhost. Useful when there is no '
+          'WAN connection available.'))
+  AddGameServerArgs(parser)
+  args = parser.parse_args()
+
+  game_server = Server(args.width, args.height)
+
+  _RunNetworkServer(game_server, args.localhost_only)
