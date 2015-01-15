@@ -35,7 +35,7 @@ class Server(object):
     self._size = messages_pb2.Coordinate(
         x=max(4, width),
         y=max(4, height))
-    self._static_blocks_grid = _MakeGrid(self._size)
+    self._static_blocks_grid = common.MakeGrid(self._size)
     self._player_tails = []  # a subset of static blocks; to track expiration
     self._rockets = []
 
@@ -108,7 +108,7 @@ class Server(object):
 
     self._rockets = []
     self._player_tails = []
-    self._static_blocks_grid = _MakeGrid(self._size)
+    self._static_blocks_grid = common.MakeGrid(self._size)
     self._BuildStaticBlocks()
 
     self._SetStage(messages_pb2.GameState.ROUND_START)
@@ -262,7 +262,7 @@ class Server(object):
 
   def _ProcessCollisions(self):
     destroyed = []
-    moving_blocks_grid = _MakeGrid(self._size)
+    moving_blocks_grid = common.MakeGrid(self._size)
     for b in itertools.chain(
         self._player_heads_by_secret.values(), self._rockets):
       hit = None
@@ -347,13 +347,6 @@ class Server(object):
       self._dirty = False
 
     return self._client_facing_state if req.hash != self._state_hash else None
-
-
-def _MakeGrid(size):
-  grid = []
-  for x in range(size.x):
-    grid.append([None] * size.y)
-  return grid
 
 
 def _RandomPosWithin(world_size):
