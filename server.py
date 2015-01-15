@@ -52,8 +52,6 @@ class Server(object):
     self._SetStage(messages_pb2.GameState.COLLECT_PLAYERS)
 
   def Register(self, req):
-    if self._stage != messages_pb2.GameState.COLLECT_PLAYERS:
-      raise RuntimeError('Cannot join during stage %s.' % self._stage)
     if req.player_secret in self._player_infos_by_secret:
       raise RuntimeError(
           'Player %s already registered as %s.' % (
@@ -71,9 +69,9 @@ class Server(object):
         alive=True,
         score=0)
     self._player_infos_by_secret[req.player_secret] = info
-    self._AddPlayerHead(req.player_secret, info)
     self._next_player_id += 1
-    self._dirty = True
+    if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
+      self._AddPlayerHead(req.player_secret, info)
     return messages_pb2.RegisterResponse(player=info)
 
   def _AddPlayerHead(self, player_secret, player_info):
@@ -88,6 +86,7 @@ class Server(object):
         player_id=player_info.player_id,
         created_tick=self._tick)
     self._player_heads_by_secret[player_secret] = head
+    self._dirty = True
 
   @Pyro4.oneway
   def Unregister(self, req):
