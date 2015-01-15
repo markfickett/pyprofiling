@@ -317,9 +317,12 @@ class Server(object):
     # will no longer update, already in statics
     self._player_tails = filter(
         lambda p: p.player_id != player_id, self._player_tails)
-    self._player_infos_by_secret[secret].alive = False
-    for info in self._player_infos_by_secret.itervalues():
-      if info.alive:
+    for other_secret, info in self._player_infos_by_secret.iteritems():
+      if secret == other_secret:
+        # If this is after Unregister, there may be no PlayerInfo for the
+        # player being killed.
+        info.alive = False
+      elif info.alive:
         info.score += 1
 
   def _SetStage(self, stage):
