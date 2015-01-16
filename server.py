@@ -197,10 +197,6 @@ class Server(object):
     dt = t - self._last_update
     if dt < _SERVER_UPDATE_INTERVAL:
       return
-    elif dt > _SERVER_UPDATE_INTERVAL * 1.5:
-      print (
-          '%.2f behind for update %d'
-          % (dt - _SERVER_UPDATE_INTERVAL, self._tick + 1))
     self._last_update = t
 
     if self._stage == messages_pb2.GameState.ROUND_START:
