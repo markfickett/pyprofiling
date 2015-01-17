@@ -141,9 +141,16 @@ class Server(object):
         self._static_blocks_grid[pos.x][pos.y] = _B(type=_B.AMMO, pos=pos)
 
     if config.MINES:
-      for _ in xrange(self._size.x * self._size.y / _MINE_RARITY):
-        pos = _RandomPosWithin(self._size)
-        self._static_blocks_grid[pos.x][pos.y] = _B(type=_B.MINE, pos=pos)
+      if config.MINE_CLUSTERS:
+        hm = height_map.MakeHeightMap(self._size, 0, 20, blur_size=4)
+        for i in xrange(self._size.x):
+          for j in xrange(self._size.y):
+            if hm[i][j] >= 11 and self._static_blocks_grid[i][j] is None:
+              self._static_blocks_grid[i][j] = _Block(_B.MINE, i, j)
+      else:
+        for _ in xrange(self._size.x * self._size.y / _MINE_RARITY):
+          pos = _RandomPosWithin(self._size)
+          self._static_blocks_grid[pos.x][pos.y] = _B(type=_B.MINE, pos=pos)
 
   @Pyro4.oneway
   def Move(self, req):
@@ -179,7 +186,8 @@ class Server(object):
 
   def _AddRocket(self, origin, direction, player_id):
     rocket_pos = messages_pb2.Coordinate(
-        x=origin.x + direction.x, y=origin.y + direction.y)
+        x=(origin.x + direction.x) % self._size.x,
+        y=(origin.y + direction.y) % self._size.y)
     self._rockets.append(_B(
         type=_B.ROCKET,
         pos=rocket_pos,
