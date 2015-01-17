@@ -96,15 +96,17 @@ class Server(object):
       self._KillPlayer(head.player_id)
       self._dirty = True
 
+  def _ResetPlayersAlive(self):
+    for secret, info in self._player_infos_by_secret.iteritems():
+      self._AddPlayerHead(secret, info)
+      info.alive = True
+
   def _StartRound(self):
     if len(self._player_infos_by_secret) <= 1:
       self._SetStage(messages_pb2.GameState.COLLECT_PLAYERS)
       return
 
-    for secret, info in self._player_infos_by_secret.iteritems():
-      self._AddPlayerHead(secret, info)
-      info.alive = True
-
+    self._ResetPlayersAlive()
     self._rockets = []
     self._player_tails = []
     self._static_blocks_grid = common.MakeGrid(self._size)
@@ -216,7 +218,8 @@ class Server(object):
     if self._stage == messages_pb2.GameState.ROUND_END:
       self._pause_ticks += 1
       if self._pause_ticks > _PAUSE_TICKS:
-        self._StartRound()
+        self._SetStage(messages_pb2.GameState.COLLECT_PLAYERS)
+        self._ResetPlayersAlive()
     self._tick += 1
 
   def _Tick(self):
@@ -337,16 +340,17 @@ class Server(object):
 
   def GetGameState(self, req):
     if self._dirty:
-      static_blocks = []
-      for row in self._static_blocks_grid:
-        static_blocks += filter(bool, row)
+      environment_blocks = []
+      if self._stage != messages_pb2.GameState.COLLECT_PLAYERS:
+        for row in self._static_blocks_grid:
+          environment_blocks += filter(bool, row)
+        environment_blocks += self._rockets
       self._client_facing_state = messages_pb2.GameState(
           hash=self._state_hash,
           size=self._size,
           player_info=self._player_infos_by_secret.values(),
           block=(
-              static_blocks +
-              self._rockets +
+              environment_blocks +
               self._player_heads_by_secret.values()),
           stage=self._stage)
       self._state_hash += 1
