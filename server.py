@@ -142,10 +142,10 @@ class Server(object):
 
     if config.MINES:
       if config.MINE_CLUSTERS:
-        hm = height_map.MakeHeightMap(self._size, 0, 20, blur_size=4)
+        hm = height_map.MakeHeightMap(self._size, 0, 30, blur_size=4)
         for i in xrange(self._size.x):
           for j in xrange(self._size.y):
-            if hm[i][j] >= 11 and self._static_blocks_grid[i][j] is None:
+            if hm[i][j] >= 17 and self._static_blocks_grid[i][j] is None:
               self._static_blocks_grid[i][j] = _Block(_B.MINE, i, j)
       else:
         for _ in xrange(self._size.x * self._size.y / _MINE_RARITY):
