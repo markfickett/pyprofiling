@@ -35,9 +35,6 @@ class Server(object):
     self._size = messages_pb2.Coordinate(
         x=max(4, width),
         y=max(4, height))
-    self._static_blocks_grid = common.MakeGrid(self._size)
-    self._player_tails = []  # a subset of static blocks; to track expiration
-    self._rockets = []
 
     self._player_heads_by_secret = {}
     self._next_player_id = 0
@@ -45,11 +42,48 @@ class Server(object):
 
     self._dirty = True
     self._stage = None
+    self._start_requested = False
     self._state_hash = 0
     self._last_update = time.time()
     self._tick = 0
 
     self._SetStage(messages_pb2.GameState.COLLECT_PLAYERS)
+
+  def _SetStage(self, stage):
+    if self._stage == stage:
+      return
+    self._stage = stage
+    self._pause_ticks = 0
+    self._dirty = True
+    self._start_requested = False
+
+    if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
+      # When preparing for a new round to start, reinitialize state and
+      # reset all players to alive.
+      self._rockets = []
+      self._player_tails = []  # a subset of static blocks; to track expiration
+      self._BuildStaticBlocks()
+      for secret, info in self._player_infos_by_secret.iteritems():
+        self._AddPlayerHeadResetPos(secret, info)
+        info.alive = True
+
+  def GetGameState(self, req):
+    if self._dirty:
+      environment_blocks = []
+      if self._stage != messages_pb2.GameState.COLLECT_PLAYERS:
+        for row in self._static_blocks_grid:
+          environment_blocks += filter(bool, row)
+        environment_blocks += self._rockets
+      self._client_facing_state = messages_pb2.GameState(
+          hash=self._state_hash,
+          size=self._size,
+          player_info=self._player_infos_by_secret.values(),
+          block=environment_blocks + self._player_heads_by_secret.values(),
+          stage=self._stage)
+      self._state_hash += 1
+      self._dirty = False
+
+    return self._client_facing_state if req.hash != self._state_hash else None
 
   def Register(self, req):
     if req.player_secret in self._player_infos_by_secret:
@@ -71,21 +105,22 @@ class Server(object):
     self._player_infos_by_secret[req.player_secret] = info
     self._next_player_id += 1
     if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
-      self._AddPlayerHead(req.player_secret, info)
+      self._AddPlayerHeadResetPos(req.player_secret, info)
     return messages_pb2.RegisterResponse(player=info)
 
-  def _AddPlayerHead(self, player_secret, player_info):
-    if player_secret in self._player_heads_by_secret:
-      return
-
+  def _AddPlayerHeadResetPos(self, player_secret, player_info):
+    head = self._player_heads_by_secret.get(player_secret)
     starting_pos = _RandomPosWithin(self._size)
-    head = _B(
-        type=_B.PLAYER_HEAD,
-        pos=starting_pos,
-        direction=messages_pb2.Coordinate(x=1, y=0),
-        player_id=player_info.player_id,
-        created_tick=self._tick)
-    self._player_heads_by_secret[player_secret] = head
+    if head:
+      head.pos.MergeFrom(starting_pos)
+    else:
+      head = _B(
+          type=_B.PLAYER_HEAD,
+          pos=starting_pos,
+          direction=messages_pb2.Coordinate(x=1, y=0),
+          player_id=player_info.player_id,
+          created_tick=self._tick)
+      self._player_heads_by_secret[player_secret] = head
     self._dirty = True
 
   @Pyro4.oneway
@@ -96,25 +131,8 @@ class Server(object):
       self._KillPlayer(head.player_id)
       self._dirty = True
 
-  def _ResetPlayersAlive(self):
-    for secret, info in self._player_infos_by_secret.iteritems():
-      self._AddPlayerHead(secret, info)
-      info.alive = True
-
-  def _StartRound(self):
-    if len(self._player_infos_by_secret) <= 1:
-      self._SetStage(messages_pb2.GameState.COLLECT_PLAYERS)
-      return
-
-    self._ResetPlayersAlive()
-    self._rockets = []
-    self._player_tails = []
-    self._static_blocks_grid = common.MakeGrid(self._size)
-    self._BuildStaticBlocks()
-
-    self._SetStage(messages_pb2.GameState.ROUND_START)
-
   def _BuildStaticBlocks(self):
+    self._static_blocks_grid = common.MakeGrid(self._size)
     def _Block(block_type, x, y):
       return _B(
           type=block_type,
@@ -167,7 +185,8 @@ class Server(object):
   @Pyro4.oneway
   def Action(self, req):
     if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
-      self._StartRound()
+      if len(self._player_infos_by_secret) > 1:
+        self._start_requested = True
     elif self._stage == messages_pb2.GameState.ROUND:
       player_head = self._player_heads_by_secret.get(req.player_secret)
       if player_head:
@@ -198,10 +217,6 @@ class Server(object):
         player_id=player_id))
     self._dirty = True
 
-  def _AdvanceBlock(self, block):
-    block.pos.x = (block.pos.x + block.direction.x) % self._size.x
-    block.pos.y = (block.pos.y + block.direction.y) % self._size.y
-
   def Update(self):
     t = time.time()
     dt = t - self._last_update
@@ -209,18 +224,19 @@ class Server(object):
       return
     self._last_update = t
 
-    if self._stage == messages_pb2.GameState.ROUND_START:
-      self._pause_ticks += 1
+    if self._stage == messages_pb2.GameState.COLLECT_PLAYERS:
+      if self._start_requested:
+        self._SetStage(messages_pb2.GameState.ROUND_START)
+    elif self._stage == messages_pb2.GameState.ROUND_START:
       if self._pause_ticks > _PAUSE_TICKS:
         self._SetStage(messages_pb2.GameState.ROUND)
     elif self._stage == messages_pb2.GameState.ROUND:
       self._Tick()
-    if self._stage == messages_pb2.GameState.ROUND_END:
-      self._pause_ticks += 1
+    elif self._stage == messages_pb2.GameState.ROUND_END:
       if self._pause_ticks > _PAUSE_TICKS:
         self._SetStage(messages_pb2.GameState.COLLECT_PLAYERS)
-        self._ResetPlayersAlive()
     self._tick += 1
+    self._pause_ticks += 1
 
   def _Tick(self):
     if self._tick % _HEAD_MOVE_INTERVAL == 0:
@@ -266,6 +282,10 @@ class Server(object):
 
     self._dirty = True
 
+  def _AdvanceBlock(self, block):
+    block.pos.x = (block.pos.x + block.direction.x) % self._size.x
+    block.pos.y = (block.pos.y + block.direction.y) % self._size.y
+
   def _ProcessCollisions(self):
     destroyed = []
     moving_blocks_grid = common.MakeGrid(self._size)
@@ -276,7 +296,7 @@ class Server(object):
         hit = target_grid[b.pos.x][b.pos.y]
         if hit:
           destroyed.append(hit)
-          if not self._CheckAddAmmo(b, hit):
+          if not self._CheckIsPlayerHeadAddAmmo(b, hit):
             destroyed.append(b)
       if not hit:
         moving_blocks_grid[b.pos.x][b.pos.y] = b
@@ -299,7 +319,7 @@ class Server(object):
               self._AddRocket(
                   b.pos, messages_pb2.Coordinate(x=i, y=j), b.player_id)
 
-  def _CheckAddAmmo(self, head, ammo):
+  def _CheckIsPlayerHeadAddAmmo(self, head, ammo):
     if not (
         not config.INFINITE_AMMO and
         head.type == _B.PLAYER_HEAD and ammo.type == _B.AMMO):
@@ -332,49 +352,11 @@ class Server(object):
       elif info.alive:
         info.score += 1
 
-  def _SetStage(self, stage):
-      if self._stage != stage:
-        self._stage = stage
-        self._pause_ticks = 0
-        self._dirty = True
-
-  def GetGameState(self, req):
-    if self._dirty:
-      environment_blocks = []
-      if self._stage != messages_pb2.GameState.COLLECT_PLAYERS:
-        for row in self._static_blocks_grid:
-          environment_blocks += filter(bool, row)
-        environment_blocks += self._rockets
-      self._client_facing_state = messages_pb2.GameState(
-          hash=self._state_hash,
-          size=self._size,
-          player_info=self._player_infos_by_secret.values(),
-          block=(
-              environment_blocks +
-              self._player_heads_by_secret.values()),
-          stage=self._stage)
-      self._state_hash += 1
-      self._dirty = False
-
-    return self._client_facing_state if req.hash != self._state_hash else None
-
 
 def _RandomPosWithin(world_size):
   return messages_pb2.Coordinate(
       x=random.randint(1, world_size.x - 2),
       y=random.randint(1, world_size.y - 2))
-
-
-def AddGameServerArgs(parser):
-  parser.add_argument(
-      '-x', '--width', type=int, default=79,
-      help=(
-          'Width of the world in blocks (characters). Network clients pick '
-          'up the size of the world from the server; standalone clients '
-          'specify their own world size.'))
-  parser.add_argument(
-      '-y', '--height', type=int, default=23,
-      help='Height of the world in blocks.')
 
 
 def _RunNetworkServer(game_server, localhost_only):
@@ -416,6 +398,18 @@ def _RunNetworkServer(game_server, localhost_only):
       broadcast_server.close()
     ns_daemon.close()
     pyro_daemon.close()
+
+
+def AddGameServerArgs(parser):
+  parser.add_argument(
+      '-x', '--width', type=int, default=79,
+      help=(
+          'Width of the world in blocks (characters). Network clients pick '
+          'up the size of the world from the server; standalone clients '
+          'specify their own world size.'))
+  parser.add_argument(
+      '-y', '--height', type=int, default=23,
+      help='Height of the world in blocks.')
 
 
 if __name__ == '__main__':
