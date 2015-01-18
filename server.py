@@ -2,6 +2,7 @@
 """A Nuke Snake server, to host network-enabled game play."""
 
 import argparse
+import collections
 import itertools
 import random
 import select
@@ -61,7 +62,8 @@ class Server(object):
       # When preparing for a new round to start, reinitialize state and
       # reset all players to alive.
       self._rockets = []
-      self._player_tails = []  # a subset of static blocks; to track expiration
+      # a subset of static blocks; to track expiration
+      self._player_tails_by_id = collections.defaultdict(lambda: list())
       self._BuildStaticBlocks()
       for secret, info in self._player_infos_by_secret.iteritems():
         self._AddPlayerHeadResetPos(secret, info)
@@ -247,7 +249,7 @@ class Server(object):
             pos=head.pos,
             created_tick=self._tick,
             player_id=head.player_id)
-        self._player_tails.append(tail)
+        self._player_tails_by_id[head.player_id].append(tail)
         self._static_blocks_grid[tail.pos.x][tail.pos.y] = tail
       for head in self._player_heads_by_secret.values():
         self._AdvanceBlock(head)
@@ -258,13 +260,10 @@ class Server(object):
     # Expire tails.
     tail_expiry = _HEAD_MOVE_INTERVAL * (
         _STARTING_TAIL_LENGTH + self._tick / 50)
-    rm_indices = []
-    for i, tail in enumerate(self._player_tails):
-      if self._tick - tail.created_tick >= tail_expiry:
-        self._static_blocks_grid[tail.pos.x][tail.pos.y] = None
-        rm_indices.append(i)
-    for i in reversed(rm_indices):
-      del self._player_tails[i]
+    for tails in self._player_tails_by_id.values():
+      while self._tick - tails[0].created_tick >= tail_expiry:
+        self._static_blocks_grid[tails[0].pos.x][tails[0].pos.y] = None
+        tails.pop(0)
 
     # Expire rockets.
     rm_indices = []
@@ -308,9 +307,11 @@ class Server(object):
           self._rockets.remove(b)
       elif self._static_blocks_grid[b.pos.x][b.pos.y] is b:
         self._static_blocks_grid[b.pos.x][b.pos.y] = None
-        if b.type == _B.PLAYER_TAIL and b in self._player_tails:
+        if b.type == _B.PLAYER_TAIL:
+          tails = self._player_tails_by_id[b.player_id]
           # If two players die at once, tails might already be removed.
-          self._player_tails.remove(b)
+          if b in tails:
+            tails.remove(b)
         elif b.type == _B.MINE:
           for i in range(-1, 2):
             for j in range(-1, 2):
@@ -342,8 +343,7 @@ class Server(object):
     if secret:
       del self._player_heads_by_secret[secret]
     # will no longer update, already in statics
-    self._player_tails = filter(
-        lambda p: p.player_id != player_id, self._player_tails)
+    del self._player_tails_by_id[player_id]
     for other_secret, info in self._player_infos_by_secret.iteritems():
       if secret == other_secret:
         # If this is after Unregister, there may be no PlayerInfo for the
