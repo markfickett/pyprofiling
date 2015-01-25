@@ -47,11 +47,13 @@ class Profiled(object):
 
   @classmethod
   def _PrintReport(cls, report, level):
+    total = sum(report.durations)
     print (
-        '%s%s %d @ %.2fs' %
+        '%s%s %d * %.2fs = %.2fs' %
         (level * _INDENT,
          report.name,
          len(report.durations),
-         sum(report.durations) / len(report.durations)))
+         total / len(report.durations),
+         total))
     for child in report.children:
       cls._PrintReport(child, level + 1)
