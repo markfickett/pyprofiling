@@ -1,4 +1,5 @@
 import collections
+import threading
 import time
 
 
@@ -12,27 +13,32 @@ class Profiled(object):
   _stack = []
   _last_report_time = time.time()
   _reports = {}
+  _lock = threading.Lock()
 
   def __init__(self, name):
-    self._report = self._reports.get(name)
+    with self._lock:
+      self._report = self._reports.get(name)
     if not self._report:
       self._report = _Report(
           is_root=not self._stack,
           name=name,
           children=[],
           durations=[])
-      if self._stack:
-        self._stack[-1].children.append(self._report)
-      self._reports[name] = self._report
+      with self._lock:
+        if self._stack:
+          self._stack[-1].children.append(self._report)
+        self._reports[name] = self._report
 
   def __enter__(self):
     self._start = time.time()
-    self._stack.append(self._report)
+    with self._lock:
+      self._stack.append(self._report)
 
   def __exit__(self, excClass, excObj, tb):
     self._report.durations.append(time.time() - self._start)
-    self._stack.pop()
-    self._MaybePrintReport()
+    with self._lock:
+      self._stack.pop()
+      self._MaybePrintReport()
 
   @classmethod
   def _MaybePrintReport(cls):
