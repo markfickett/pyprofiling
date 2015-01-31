@@ -11,13 +11,14 @@ _Report = collections.namedtuple(
 
 
 class Profiled(object):
-  _stack = []
+  _stacks_by_threadid = collections.defaultdict(lambda: list())
   _last_report_time = time.time()
   _reports = {}
   _lock = threading.Lock()
 
   def __init__(self, name):
     with self._lock:
+      self._stack = self._stacks_by_threadid[threading.current_thread().ident]
       self._report = self._reports.get(name)
     if not self._report:
       self._report = _Report(
@@ -25,25 +26,24 @@ class Profiled(object):
           name=name,
           children=[],
           durations=[])
+      if self._stack:
+        self._stack[-1].children.append(self._report)
       with self._lock:
-        if self._stack:
-          self._stack[-1].children.append(self._report)
         self._reports[name] = self._report
 
   def __enter__(self):
     self._start = time.time()
-    with self._lock:
-      self._stack.append(self._report)
+    self._stack.append(self._report)
 
   def __exit__(self, excClass, excObj, tb):
     self._report.durations.append(time.time() - self._start)
+    self._stack.pop()
     with self._lock:
-      self._stack.pop()
-      self._MaybePrintReport()
+      self._MaybePrintReport(self._stack)
 
   @classmethod
-  def _MaybePrintReport(cls):
-    if (cls._stack or
+  def _MaybePrintReport(cls, stack):
+    if (stack or
         time.time() - Profiled._last_report_time < _REPORT_INTERVAL_S):
       return
     cls._last_report_time = time.time()
