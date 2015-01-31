@@ -1,4 +1,5 @@
 import collections
+import logging
 import threading
 import time
 
@@ -48,13 +49,14 @@ class Profiled(object):
     cls._last_report_time = time.time()
     for report in cls._reports.values():
       if report.is_root:
-        cls._PrintReport(report, 0)
+        logging.info('\n'.join([''] + cls._GetReportLines(report, 0)))
     cls._reports = {}
 
   @classmethod
-  def _PrintReport(cls, report, level):
+  def _GetReportLines(cls, report, level):
     total = sum(report.durations)
-    print (
+    lines = []
+    lines.append(
         '%s%s %d * %.2fs = %.2fs' %
         (level * _INDENT,
          report.name,
@@ -62,4 +64,5 @@ class Profiled(object):
          total / len(report.durations),
          total))
     for child in report.children:
-      cls._PrintReport(child, level + 1)
+      lines += cls._GetReportLines(child, level + 1)
+    return lines
