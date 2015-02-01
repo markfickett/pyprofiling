@@ -6,6 +6,7 @@ import time
 
 _REPORT_INTERVAL_S = 10.0
 _INDENT = '  '
+_MIN_REMAINDER = 0.01
 _Report = collections.namedtuple(
     'Report', ('is_root', 'name', 'children', 'durations'))
 
@@ -55,14 +56,20 @@ class Profiled(object):
   @classmethod
   def _GetReportLines(cls, report, level):
     total = sum(report.durations)
+    ave = total / len(report.durations)
+    max_value = max(report.durations)
     lines = []
     lines.append(
-        '%s%s %d * %.2fs = %.2fs' %
+        '%s%s %d * %.2fs = %.2fs%s' %
         (level * _INDENT,
          report.name,
          len(report.durations),
-         total / len(report.durations),
-         total))
+         ave,
+         total,
+         '' if max_value < ave * 10 else ' (max %.2fs)' % max_value))
     for child in report.children:
       lines += cls._GetReportLines(child, level + 1)
+      total -= sum(child.durations)
+    if report.children and total >= _MIN_REMAINDER:
+      lines.append('%sremainder %.2fs' % ((level + 1) * _INDENT, total))
     return lines
