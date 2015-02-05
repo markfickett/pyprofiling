@@ -73,3 +73,24 @@ class Profiled(object):
     if report.children and total >= _MIN_REMAINDER:
       lines.append('%sremainder %.2fs' % ((level + 1) * _INDENT, total))
     return lines
+
+
+if __name__ == '__main__':
+  import random
+  logging.basicConfig(
+      format='%(levelname)s %(asctime)s %(filename)s:%(lineno)s: %(message)s',
+      level=logging.INFO)
+  while True:
+    with Profiled('main'):
+      for _ in xrange(10):
+        with Profiled('short'):
+          r = random.random()
+        with Profiled('will report outlier max'):
+          if r > 0.95:
+            time.sleep(1.0)
+      with Profiled('long with subsection'):
+        for _ in xrange(1000):
+          for _ in xrange(100):
+            with Profiled('extremely frequent'):
+              pass
+      time.sleep(r)  # reported in remainder
