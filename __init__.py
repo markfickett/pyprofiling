@@ -10,6 +10,7 @@ _MIN_REMAINDER = 0.01
 
 
 class Profiled(object):
+  # Shared state; _lock must be held while using these values.
   _stacks_by_threadid = collections.defaultdict(lambda: list())
   _last_report_time = time.time()
   _reports_by_name = {}
@@ -39,21 +40,33 @@ class Profiled(object):
 
   @classmethod
   def _MaybePrintReport(cls, stack):
-    if time.time() - Profiled._last_report_time < _REPORT_INTERVAL_S:
+    # Always print if we're exiting the root profiled code, to avoid losing
+    # data. Otherwise, wait to print until the reporting interval has elapsed.
+    if stack and (
+        time.time() - Profiled._last_report_time < _REPORT_INTERVAL_S):
       return
+
+    # Log all available reports.
     cls._last_report_time = time.time()
     root_reports = [r for r in cls._reports_by_name.values() if r.level == 0]
     for report in root_reports:
       logging.info('\n'.join([''] + cls._GetReportLines(report, 0)))
 
+    # After printing report details, remove anything that's not current. Thus
+    # each reporting period covers only what happened since the last one.
+    # (Without pruning, reports would be cumulative.)
     cls._reports_by_name = {}
     for root in root_reports:
       cls._PruneReports(None, root)
 
   @classmethod
   def _PruneReports(cls, parent, report):
-    if not (report.start is not None or
-        (parent and not parent.durations)):
+    """
+    Returns:
+      True if this report should be kept around, False if it can be dropped.
+    """
+    # Keep reports which are currently in context.
+    if not (report.start is not None or (parent and not parent.durations)):
       return False
 
     cls._reports_by_name[report.name] = report
@@ -69,6 +82,13 @@ class Profiled(object):
 
   @classmethod
   def _GetReportLines(cls, report, level):
+    """Format one timing summary line for this report, plus lines for children.
+
+    Returns:
+      A list of lines like "<report name> 2 * 1.16s = 2.32s". Each line will
+      have an appropriate amount of whitespace padding for indentation, based
+      on the given level.
+    """
     lines = []
     if report.durations:
       total = sum(report.durations)
@@ -100,13 +120,28 @@ class Profiled(object):
 
 
 class _Report(object):
+  """Record of past execution times for one profiled block of code."""
   def __init__(self, name, level):
+    # An informational / user-provided name for the profiled block of code.
     self.name = name
+
+    # For formatting, how deeply nested the profiled code is.
     self.level = level
-    self.children = []
+
+    # When this block of code was most recently started. None if the block
+    # is not currently running (not in context).
     self.start = None
+
+    # List of durations (in seconds) this code block has taken. Used to
+    # summarize how ave/max times.
     self.durations = []
+
     self.past_child_durations = 0
+
+    # List of child _Reports. All children are executed fully within the parent,
+    # but there may be some parent execution time which is not subdivided
+    # (reported as "remainder").
+    self.children = []
 
 
 if __name__ == '__main__':
@@ -114,12 +149,23 @@ if __name__ == '__main__':
   logging.basicConfig(
       format='%(levelname)s %(asctime)s %(filename)s:%(lineno)s: %(message)s',
       level=logging.INFO)
+
+  # At its simplest, we can wrap a block of code in a Profiled context guard,
+  # and see its timing information printed out when it's done.
+  with Profiled('initial block, should take about 1 second'):
+    time.sleep(1.0)
+
+  # We can also wrap a long-running (or even an infinite loop), and get periodic
+  # reports of how it's currently performing.
   with Profiled('longstanding root'):
     while True:
+      # This is a child Profiled.
       with Profiled('main'):
         for _ in xrange(10):
           with Profiled('short'):
             r = random.random()
+          # Usually, only the average execution time is reported. But if a block
+          # of code has highly variable execution time, the max is reported too.
           with Profiled('will report outlier max'):
             if r > 0.95:
               time.sleep(1.0)
@@ -128,4 +174,7 @@ if __name__ == '__main__':
             for _ in xrange(100):
               with Profiled('extremely frequent'):
                 pass
-        time.sleep(r)  # reported in remainder
+        # This statement is part of the 'main' block, but not in any of its
+        # children. It gets called out in the 'remainder', so we notice that
+        # the sum of the children is less than the parent.
+        time.sleep(r)
